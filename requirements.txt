@@ -1,0 +1,38 @@
+# Financial Data Extraction Tools - Core Requirements
+# Essential dependencies for financial data tools
+
+# Data manipulation and analysis
+pandas>=2.2.0
+numpy>=1.26.0
+
+# Data validation and modeling  
+pydantic>=2.11.0
+typing-extensions>=4.12.0
+
+# API clients for financial data
+polygon-api-client>=1.15.0  # Stock market data from Polygon
+fredapi>=0.5.2              # Economic data from FRED
+certifi>=2024.12.0          # SSL certificates for API calls
+
+# Environment and configuration
+python-dotenv>=1.0.0        # Load environment variables from .env
+
+# Async execution, retries, rate limiting, caching, and plotting
+tenacity>=8.2.0             # Retry with backoff + jitter
+aiolimiter>=1.1.0           # Async token-bucket rate limiter
+filelock>=3.13.0            # File-based locks for cache writes
+plotly>=5.22.0              # Interactive plotting (HTML export)
+pyarrow>=16.0.0             # Parquet IO engine (or use fastparquet)
+
+# Optional: Development and testing
+# pytest>=7.0.0
+# pytest-asyncio>=0.21.0
+
+# Optional: Jupyter notebook support  
+# jupyter>=1.0.0
+# ipykernel>=6.0.0
+
+# Future agent framework dependencies (install separately when needed)
+# langgraph>=0.2.0          # State machine orchestration
+# pydantic-ai>=0.1.0        # AI agent framework with structured outputs  
+# openai>=1.0.0             # OpenAI API client
