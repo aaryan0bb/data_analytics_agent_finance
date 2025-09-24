@@ -85,6 +85,29 @@ class FundamentalsRequest(BaseModel):
     start_date: str = Field(..., description="Start date in YYYY-MM-DD format")
     end_date: str = Field(..., description="End date in YYYY-MM-DD format")
 
+class InsiderTradesRequest(BaseModel):
+    """Request model for insider trades data"""
+    start_date: str = Field(..., description="Start date in YYYY-MM-DD format")
+    end_date: str = Field(..., description="End date in YYYY-MM-DD format")
+
+    @validator('start_date', 'end_date')
+    def validate_dates(cls, v):
+        try:
+            datetime.strptime(v, '%Y-%m-%d')
+        except ValueError:
+            raise ValueError("Date must be in YYYY-MM-DD format")
+        return v
+
+class ESGRatingsRequest(BaseModel):
+    """Request model for ESG ratings data"""
+    ticker: str = Field(..., description="Stock ticker symbol (e.g., AAPL)")
+
+    @validator('ticker')
+    def validate_ticker(cls, v):
+        if not v or not isinstance(v, str):
+            raise ValueError("Ticker must be a non-empty string")
+        return v.upper().strip()
+
 # OUTPUT MODELS
 class DataExtractionResponse(BaseModel):
     """Generic response model for data extraction"""
@@ -372,9 +395,142 @@ def extract_fundamentals_data_from_fmp(ticker: str, start_date: str, end_date: s
         
         logger.info(f"Retrieved {len(df)} fundamental records for {ticker}")
         return df
-        
+
     except Exception as e:
         logger.error(f"Error fetching fundamentals data for {ticker}: {e}")
+        return pd.DataFrame()
+
+def extract_latest_insider_trades_from_fmp(start_date: str, end_date: str) -> pd.DataFrame:
+    """
+    Extract latest insider trades data from Financial Modeling Prep API
+
+    Args:
+        start_date: Start date (YYYY-MM-DD) - used for post-processing filtering
+        end_date: End date (YYYY-MM-DD) - used for post-processing filtering
+
+    Returns:
+        DataFrame with insider trades data filtered by date range
+    """
+    try:
+        from urllib.request import urlopen
+        import certifi
+        import json
+
+        # Validate API key
+        api_key = os.getenv('FMP_API_KEY')
+        if not api_key:
+            raise ValueError("FMP_API_KEY environment variable not set")
+
+        def get_jsonparsed_data(url):
+            with urlopen(url, cafile=certifi.where()) as response:
+                data = response.read().decode("utf-8")
+            return json.loads(data)
+
+        logger.info("Fetching latest insider trades data")
+        logger.info(
+            "Insider trades call parameters: start_date=%s, end_date=%s",
+            start_date,
+            end_date,
+        )
+
+        # Fetch insider trades data
+        base_url = "https://financialmodelingprep.com/api/v3/"
+        url = f"{base_url}insider-trading/latest?limit=100&apikey={api_key}"
+
+        json_data = get_jsonparsed_data(url)
+
+        if not json_data or not isinstance(json_data, list):
+            logger.warning("No insider trades data found")
+            return pd.DataFrame()
+
+        # Convert to DataFrame
+        df = pd.DataFrame(json_data)
+
+        # Filter by date range if date column exists (similar to fundamentals filtering)
+        if 'date' in df.columns:
+            df['date'] = pd.to_datetime(df['date'])
+
+            if start_date:
+                start_dt = pd.to_datetime(start_date)
+                df = df[df['date'] >= start_dt]
+
+            if end_date:
+                end_dt = pd.to_datetime(end_date)
+                df = df[df['date'] <= end_dt]
+
+            df.sort_values('date', inplace=True, ascending=False)
+        elif 'filingDate' in df.columns:
+            # Alternative date column sometimes used in insider trades
+            df['date'] = pd.to_datetime(df['filingDate'])
+
+            if start_date:
+                start_dt = pd.to_datetime(start_date)
+                df = df[df['date'] >= start_dt]
+
+            if end_date:
+                end_dt = pd.to_datetime(end_date)
+                df = df[df['date'] <= end_dt]
+
+            df.sort_values('date', inplace=True, ascending=False)
+
+        logger.info(f"Retrieved {len(df)} insider trades records")
+        return df
+
+    except Exception as e:
+        logger.error(f"Error fetching insider trades data: {e}")
+        return pd.DataFrame()
+
+def extract_esg_ratings_from_fmp(ticker: str) -> pd.DataFrame:
+    """
+    Extract ESG ratings data from Financial Modeling Prep API
+
+    Args:
+        ticker: Stock ticker symbol
+
+    Returns:
+        DataFrame with ESG ratings data
+    """
+    try:
+        from urllib.request import urlopen
+        import certifi
+        import json
+
+        # Validate API key
+        api_key = os.getenv('FMP_API_KEY')
+        if not api_key:
+            raise ValueError("FMP_API_KEY environment variable not set")
+
+        def get_jsonparsed_data(url):
+            with urlopen(url, cafile=certifi.where()) as response:
+                data = response.read().decode("utf-8")
+            return json.loads(data)
+
+        logger.info(f"Fetching ESG ratings for {ticker}")
+
+        # Fetch ESG ratings data
+        base_url = "https://financialmodelingprep.com/api/v3/"
+        url = f"{base_url}esg-ratings?symbol={ticker}&apikey={api_key}"
+
+        json_data = get_jsonparsed_data(url)
+
+        if not json_data:
+            logger.warning(f"No ESG ratings data found for {ticker}")
+            return pd.DataFrame()
+
+        # Convert to DataFrame - handle both single object and list responses
+        if isinstance(json_data, list):
+            df = pd.DataFrame(json_data)
+        else:
+            df = pd.DataFrame([json_data])
+
+        # Ensure symbol column
+        df['symbol'] = ticker
+
+        logger.info(f"Retrieved {len(df)} ESG ratings records for {ticker}")
+        return df
+
+    except Exception as e:
+        logger.error(f"Error fetching ESG ratings for {ticker}: {e}")
         return pd.DataFrame()
 
 # =============================================================================
@@ -547,6 +703,72 @@ def get_fundamentals_data(request: FundamentalsRequest) -> DataExtractionRespons
         return DataExtractionResponse(
             success=False,
             error_message=str(e),
+            records_count=0
+        )
+
+def get_insider_trades(request: InsiderTradesRequest) -> DataExtractionResponse:
+    """
+    Agent-ready wrapper for insider trades data extraction
+    """
+    try:
+        df = extract_latest_insider_trades_from_fmp(
+            start_date=request.start_date,
+            end_date=request.end_date
+        )
+
+        if df.empty:
+            return DataExtractionResponse(
+                success=False,
+                error_message="No insider trades data found",
+                records_count=0
+            )
+
+        data = df.to_dict('records')
+
+        return DataExtractionResponse(
+            success=True,
+            data=data,
+            records_count=len(data)
+        )
+
+    except Exception as e:
+        return DataExtractionResponse(
+            success=False,
+            error_message=str(e),
+            records_count=0
+        )
+
+def get_esg_ratings(request: ESGRatingsRequest) -> DataExtractionResponse:
+    """
+    Agent-ready wrapper for ESG ratings data extraction
+    """
+    try:
+        df = extract_esg_ratings_from_fmp(
+            ticker=request.ticker
+        )
+
+        if df.empty:
+            return DataExtractionResponse(
+                success=False,
+                error_message=f"No ESG ratings data found for {request.ticker}",
+                ticker=request.ticker,
+                records_count=0
+            )
+
+        data = df.to_dict('records')
+
+        return DataExtractionResponse(
+            success=True,
+            data=data,
+            records_count=len(data),
+            ticker=request.ticker
+        )
+
+    except Exception as e:
+        return DataExtractionResponse(
+            success=False,
+            error_message=str(e),
+            ticker=request.ticker,
             records_count=0
         )
 

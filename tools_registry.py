@@ -6,10 +6,14 @@ from tools_clean import (
     MacroDataRequest,
     FundamentalsRequest,
     AnalystEstimatesRequest,
+    InsiderTradesRequest,
+    ESGRatingsRequest,
     get_stock_data,
     get_macro_data,
     get_fundamentals_data,
     get_analyst_estimates,
+    get_insider_trades,
+    get_esg_ratings,
     bulk_extract_daily_closing_prices_from_polygon,
 )
 from validator import validate_tool_params
@@ -223,3 +227,74 @@ class BulkPricesPlugin(ToolPlugin):
         return validate_tool_params(self.name, params)
     def execute(self, params):
         return bulk_extract_daily_closing_prices_from_polygon(params.get("tickers", ["AAPL", "MSFT"]), params.get("start_date", "2023-01-01"), params.get("end_date", "2023-12-31"))
+
+class InsiderTradesPlugin(ToolPlugin):
+    def __init__(self):
+        self._name = "extract_latest_insider_trades"
+        self._desc = "Track which company insiders are buying or selling stocks and analyze their transactions"
+        self._semantic_key = "insider_trades"
+
+    @property
+    def name(self) -> str: return self._name
+
+    @property
+    def description(self) -> str: return self._desc
+
+    @property
+    def semantic_key(self) -> str: return self._semantic_key
+
+    def get_schema(self) -> dict:
+        return {
+            "name": self.name,
+            "description": self.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "start_date": {"type": "string"},
+                    "end_date": {"type": "string"},
+                },
+                "required": ["start_date", "end_date"],
+            },
+        }
+
+    def validate(self, params: Dict[str, Any]) -> tuple[bool, Dict[str, Any], list[str]]:
+        return validate_tool_params(self.name, params)
+
+    def execute(self, params: Dict[str, Any]) -> Any:
+        req = InsiderTradesRequest(**params)
+        return get_insider_trades(req)
+
+class ESGRatingsPlugin(ToolPlugin):
+    def __init__(self):
+        self._name = "extract_esg_ratings"
+        self._desc = "Make informed investment decisions based on environmental, social, and governance (ESG) performance data"
+        self._semantic_key = "esg_ratings"
+
+    @property
+    def name(self) -> str: return self._name
+
+    @property
+    def description(self) -> str: return self._desc
+
+    @property
+    def semantic_key(self) -> str: return self._semantic_key
+
+    def get_schema(self) -> dict:
+        return {
+            "name": self.name,
+            "description": self.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "ticker": {"type": "string"},
+                },
+                "required": ["ticker"],
+            },
+        }
+
+    def validate(self, params: Dict[str, Any]) -> tuple[bool, Dict[str, Any], list[str]]:
+        return validate_tool_params(self.name, params)
+
+    def execute(self, params: Dict[str, Any]) -> Any:
+        req = ESGRatingsRequest(**params)
+        return get_esg_ratings(req)

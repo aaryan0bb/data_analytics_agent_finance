@@ -20,7 +20,7 @@ import tempfile
 import pickle
 import asyncio
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple, ClassVar
+from typing import List, Dict, Any, Optional, Tuple, Literal
 from typing_extensions import TypedDict
 
 import pandas as pd
@@ -130,27 +130,6 @@ TAVILY_TOOL_DEF = [{
                 "description": "Whether to include Tavily's synthesized answer payload in the response.",
                 "default": False
             },
-            "include_images": {
-                "type": "boolean",
-                "description": "Whether to include image results in the Tavily response payload.",
-                "default": False
-            },
-            "include_domains": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Optional list of domains to prefer during research queries.",
-                "default": []
-            },
-            "exclude_domains": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Optional list of domains to exclude from search results.",
-                "default": []
-            },
-            "days": {
-                "type": "integer",
-                "description": "Optional recency window in days for Tavily search filtering."
-            }
         },
         "required": ["query", "max_results"],
         "additionalProperties": False
@@ -327,6 +306,71 @@ def _persist_df_as_csv(df: pd.DataFrame, data_dir: str, sem_key: str) -> dict:
     }
 
 
+def _order_preserving_dedupe(items: List[str]) -> List[str]:
+    seen: set[str] = set()
+    deduped: List[str] = []
+    for item in items:
+        if item not in seen:
+            deduped.append(item)
+            seen.add(item)
+    return deduped
+
+
+def _code_context_snippet(state: AgentState, max_chars: int = 2000) -> str:
+    """Return a truncated view of generated code for planner prompts."""
+    code = state.get("generated_code") or ""
+    if not code:
+        return ""
+    snippet = code[:max_chars]
+    if len(code) > max_chars:
+        snippet += "\n# ... truncated for tool parameterization context ..."
+    return snippet
+
+
+def _build_dataset_descriptor(path: str) -> Dict[str, Any]:
+    """Generate a standardized dataset descriptor for tool outputs."""
+
+    try:
+        if path.lower().endswith(".parquet"):
+            df = pd.read_parquet(path)
+        else:
+            df = pd.read_csv(path)
+        rows = int(len(df))
+        cols = int(len(df.columns))
+        dtypes = {str(k): str(v) for k, v in df.dtypes.to_dict().items()}
+        nulls = {str(k): int(v) for k, v in df.isna().sum().to_dict().items()}
+        date_start = date_end = None
+        if "date" in df.columns:
+            s_all = pd.to_datetime(df["date"], errors="coerce").dropna()
+            if not s_all.empty:
+                try:
+                    is_midnight = ((s_all.dt.hour.fillna(0) == 0) & (s_all.dt.minute.fillna(0) == 0) & (s_all.dt.second.fillna(0) == 0)).all()
+                except Exception:
+                    is_midnight = False
+                fmt = "%Y-%m-%d" if is_midnight else "%Y-%m-%d %H:%M:%S"
+                date_start = s_all.min().strftime(fmt)
+                date_end = s_all.max().strftime(fmt)
+        head_df = df.head(5).copy()
+        for c in head_df.columns:
+            if pd.api.types.is_datetime64_any_dtype(head_df[c]):
+                head_df[c] = pd.to_datetime(head_df[c], errors="coerce").dt.strftime("%Y-%m-%d %H:%M:%S")
+        sample_head = head_df.to_dict(orient="records")
+
+        return {
+            "ok": True,
+            "file_path": path,
+            "rows": rows,
+            "columns": cols,
+            "dtypes": dtypes,
+            "nulls": nulls,
+            "date_start": date_start,
+            "date_end": date_end,
+            "sample_head": sample_head,
+        }
+    except Exception as exc:
+        return {"ok": False, "file_path": path, "error": str(exc)}
+
+
 def _save_graph_state(initial_state: Dict[str, Any], final_state: Dict[str, Any]) -> Optional[str]:
     """Persist the entire graph state locally and emit a LangSmith run.
 
@@ -465,335 +509,113 @@ class ToolParamsPlan(BaseModel):
 # Post-manifest Improvement Contracts
 ######################################################################
 
-
-class EnumeratedValue(BaseModel):
-    """Base class to express string-backed enumerations as Pydantic models."""
-
-    value: str = Field(
-        ...,
-        description="Normalized string token representing a constrained choice for this concept.",
-    )
-    allowed_values: ClassVar[Tuple[str, ...]] = ()
-    concept_name: ClassVar[str] = "value"
-
-    @validator("value", pre=True)
-    def _coerce_value(cls, v: Any) -> str:
-        if isinstance(v, cls):
-            return v.value
-        if isinstance(v, EnumeratedValue):
-            return v.value
-        if isinstance(v, dict):
-            candidate = v.get("value")
-            if isinstance(candidate, str):
-                return candidate
-        if isinstance(v, str):
-            return v
-        raise TypeError(f"{cls.__name__}.value must be provided as a string.")
-
-    @validator("value")
-    def _validate_choice(cls, v: str) -> str:
-        if cls.allowed_values and v not in cls.allowed_values:
-            raise ValueError(
-                f"{cls.__name__}.value must be one of {cls.allowed_values}; received '{v}'."
-            )
-        return v
-
-    def __str__(self) -> str:
-        return self.value
+Category = Literal[
+    "financial_factors",
+    "visualizations",
+    "data_sources",
+    "methodology",
+    "risk_controls",
+    "benchmarks",
+    "diagnostics",
+]
+Intent = Literal["discover", "validate", "challenge", "visualize", "ops"]
 
 
-class RQCategory(EnumeratedValue):
-    """Categorization for a research question covering the improvement theme."""
-
-    allowed_values: ClassVar[Tuple[str, ...]] = (
-        "financial_factors",
-        "visualizations",
-        "data_sources",
-        "methodology",
-        "risk_controls",
-        "benchmarks",
-        "diagnostics",
-    )
-    value: str = Field(
-        ...,
-        description="Research theme driving the query (financial_factors, visualizations, data_sources, methodology, risk_controls, benchmarks, diagnostics).",
-    )
-
-
-class RQIntent(EnumeratedValue):
-    """Intent that clarifies the purpose of the research question."""
-
-    allowed_values: ClassVar[Tuple[str, ...]] = (
-        "discover",
-        "validate",
-        "challenge",
-        "visualize",
-        "ops",
-    )
-    value: str = Field(
-        ...,
-        description="Desired research posture (discover, validate, challenge, visualize, ops).",
-    )
-
-
-class ImprovementType(EnumeratedValue):
-    """Type of improvement requested by the evaluator."""
-
-    allowed_values: ClassVar[Tuple[str, ...]] = (
-        "code",
-        "result",
-        "data",
-        "validation",
-        "visualization",
-        "infra",
-    )
-    value: str = Field(
-        ...,
-        description="Improvement axis targeted by the evaluator (code, result, data, validation, visualization, infra).",
-    )
-
-
-class RiskLevel(EnumeratedValue):
-    """Risk assessment for a proposed improvement."""
-
-    allowed_values: ClassVar[Tuple[str, ...]] = ("low", "medium", "high")
-    value: str = Field(
-        ...,
-        description="Subjective execution risk (low, medium, high) associated with the improvement.",
-    )
-
-
-class DatasetSummary(BaseModel):
-    """Structured summary describing a dataset artifact generated by a tool."""
-
-    key: str = Field(..., description="Semantic key assigned to the dataset in tool_outputs.")
-    file_path: str = Field(..., description="Filesystem path to the dataset artifact.")
-    rows: int = Field(..., description="Number of rows present in the dataset artifact.")
-    columns: int = Field(..., description="Number of columns present in the dataset artifact.")
-    dtypes: Dict[str, str] = Field(..., description="Mapping of column names to their dtype representations.")
-    nulls: Dict[str, int] = Field(..., description="Mapping of column names to null value counts.")
-    date_start: Optional[str] = Field(None, description="Earliest timestamp or date present in the dataset, if any.")
-    date_end: Optional[str] = Field(None, description="Latest timestamp or date present in the dataset, if any.")
-    sample_head: List[Dict[str, Any]] = Field(
-        default_factory=list,
-        description="Preview rows (first five records) for quick inspection of the dataset.",
-    )
-
-
-class EvalNodeInput(BaseModel):
-    """Payload passed to the evaluation node to determine improvement actions."""
-
-    user_request: str = Field(..., description="Original user request driving the workflow run.")
-    manifest_summary: Dict[str, Any] = Field(
-        default_factory=dict,
-        description="Summary of the latest result manifest including artifact metadata.",
-    )
-    execution_result: Dict[str, Any] = Field(
-        default_factory=dict,
-        description="Execution stdout/stderr and success flags from the latest run.",
-    )
-    warnings: List[str] = Field(
-        default_factory=list,
-        description="Accumulated warnings generated through the workflow so far.",
-    )
-    datasets: List[DatasetSummary] = Field(
-        default_factory=list,
-        description="Dataset summaries derived from tool outputs that code generation can leverage.",
-    )
-    assumptions: List[str] = Field(
-        default_factory=list,
-        description="Explicit assumptions adopted by the planner when parameters were ambiguous.",
-    )
-
-
-class ResearchQueryItem(BaseModel):
-    """Single Tavily research query specification with guardrails and metadata."""
+class ResearchQuery(BaseModel):
+    """Minimal Tavily research query specification."""
 
     id: str = Field(..., description="Stable identifier for correlating research evidence to the query.")
-    category: RQCategory = Field(
-        ..., description="Research theme describing the query focus (see RQCategory choices)."
-    )
-    intent: RQIntent = Field(
-        ..., description="Purpose of the research (discover, validate, challenge, visualize, ops)."
-    )
-    question: str = Field(
-        ..., description="Full natural-language question the research should answer (>=10 chars)."
-    )
-    priority: int = Field(
-        5,
-        ge=1,
-        le=10,
-        description="Priority of the research query; lower numbers execute first (1 highest).",
-    )
-    query_strings: List[str] = Field(
-        ...,
-        min_items=1,
-        max_items=5,
-        description="Candidate Tavily search strings tuned for high-signal retrieval.",
-    )
-    include_domains: List[str] = Field(
-        default_factory=list,
-        description="Domains that Tavily should prioritize when fetching evidence.",
-    )
-    exclude_domains: List[str] = Field(
-        default_factory=list,
-        description="Domains that Tavily should avoid when fetching evidence.",
-    )
-    recency_days: Optional[int] = Field(
-        None,
-        description="Optional recency constraint in days to bound Tavily search results.",
-    )
-    max_results: int = Field(
-        5,
-        ge=1,
-        le=20,
-        description="Maximum number of Tavily documents to retrieve per query.",
-    )
-    citations_required: bool = Field(
-        True,
-        description="Flag indicating whether synthesized research must include citations.",
-    )
+    question: str = Field(..., min_length=10, description="Full natural-language question the research should answer.")
+    category: Category
+    intent: Intent
+    priority: int = Field(5, ge=1, le=10, description="Lower numbers run first (1 is highest priority).")
+    queries: List[str] = Field(..., min_items=1, max_items=5, description="Candidate Tavily query strings.")
+    include_domains: List[str] = Field(default_factory=list, description="Domains Tavily should prioritize.")
+    exclude_domains: List[str] = Field(default_factory=list, description="Domains Tavily should avoid.")
+    recency_days: Optional[int] = Field(None, description="Optional recency filter in days.")
+    k: int = Field(5, ge=1, le=20, description="Maximum number of Tavily search results to retrieve.")
+    citations_required: bool = Field(True, description="Whether synthesized answers must include citations.")
 
-    @validator("query_strings")
-    def _unique_queries(cls, v: List[str]) -> List[str]:
-        dedup = list(dict.fromkeys(v))
+    @validator("queries")
+    def _uniq_queries(cls, v: List[str]) -> List[str]:
+        dedup = []
+        for item in v:
+            if not isinstance(item, str):
+                raise ValueError("Each query must be a string.")
+            stripped = item.strip()
+            if len(stripped) < 8:
+                raise ValueError("Each query must be at least 8 characters long.")
+            if stripped not in dedup:
+                dedup.append(stripped)
         if len(dedup) != len(v):
-            raise ValueError("query_strings must contain unique values")
-        for item in dedup:
-            if len(item.strip()) < 8:
-                raise ValueError("Each query string must be at least 8 non-whitespace characters long.")
+            raise ValueError("queries must be unique")
         return dedup
 
 
-class ResearchPlan(BaseModel):
-    """Collection of research queries aligned to a single improvement goal."""
+class Evidence(BaseModel):
+    """Evidence captured for a single research query."""
 
-    goal_statement: str = Field(..., description="High-level statement of the research goal supporting improvements.")
-    queries: List[ResearchQueryItem] = Field(
-        default_factory=list,
-        description="Ordered list of research queries the agent intends to execute.",
-    )
-
-
-class TavilyDoc(BaseModel):
-    """Single document retrieved from Tavily with supporting metadata."""
-
-    title: str = Field(..., description="Document title as returned by Tavily.")
-    url: str = Field(..., description="Canonical URL of the Tavily document.")
-    snippet: Optional[str] = Field(
-        "",
-        description="Relevant text snippet or abstract extracted by Tavily for preview.",
-    )
-    published_at: Optional[str] = Field(
-        None,
-        description="Publication timestamp string if available in Tavily results.",
-    )
-    score: Optional[float] = Field(
-        None,
-        description="Relevance score assigned by Tavily to the document (higher is better).",
-    )
+    query_id: str
+    used_query: str
+    docs: List[Dict[str, Any]] = Field(default_factory=list)
+    synthesis: str
+    caveats: List[str] = Field(default_factory=list)
 
 
-class QueryEvidence(BaseModel):
-    """Evidence bundle captured for a single research query execution."""
+class ResearchBundle(BaseModel):
+    """Aggregate research payload shared across the improvement loop."""
 
-    query_id: str = Field(..., description="Identifier of the research query this evidence corresponds to.")
-    generated_query: str = Field(..., description="Actual query string Tavily executed after model selection.")
-    docs: List[TavilyDoc] = Field(
-        default_factory=list,
-        description="Documents retrieved from Tavily for this query.",
-    )
-    synthesis: str = Field(
-        ..., description="Model-written synthesis of findings referencing Tavily documents."
-    )
-    caveats: List[str] = Field(
-        default_factory=list,
-        description="Caveats or limitations recorded during synthesis for this query.",
-    )
+    goal: Optional[str] = ""
+    queries: List[ResearchQuery] = Field(default_factory=list)
+    evidences: List[Evidence] = Field(default_factory=list)
+    summary: str = ""
+    conflicts: List[str] = Field(default_factory=list)
+    recommended_actions: List[str] = Field(default_factory=list)
 
 
-class ResearchEvidenceBundle(BaseModel):
-    """Full research evidence output including plan and per-query results."""
-
-    plan: ResearchPlan = Field(..., description="Research plan that produced the evidence bundle.")
-    evidences: List[QueryEvidence] = Field(
-        default_factory=list,
-        description="Per-query evidence packets collected from Tavily runs.",
-    )
-    global_summary: str = Field(
-        "",
-        description="Optional cross-query summary distilling the most actionable insights.",
-    )
-    conflicting_findings: List[str] = Field(
-        default_factory=list,
-        description="List of conflicting or disputed findings detected across evidence.",
-    )
-    recommended_actions: List[str] = Field(
-        default_factory=list,
-        description="Actions recommended after reviewing the research evidence.",
-    )
+ImprovementKind = Literal["code", "result", "data", "validation", "visualization", "infra"]
+RiskLevel = Literal["low", "medium", "high"]
 
 
-class ImprovementItem(BaseModel):
+class Improvement(BaseModel):
     """Single actionable improvement proposed by the evaluator."""
 
-    type: ImprovementType = Field(
-        ..., description="Category describing what dimension the improvement targets."
-    )
-    description: str = Field(
-        ..., description="Short description of the improvement to be implemented."
-    )
-    rationale: str = Field(
-        ..., description="Justification clarifying why the improvement matters."
-    )
-    acceptance_criteria: List[str] = Field(
-        default_factory=list,
-        description="Specific acceptance checks required to consider the improvement done.",
-    )
-    risk: RiskLevel = Field(
-        default_factory=lambda: RiskLevel(value="low"),
-        description="Risk assessment describing complexity or potential regressions.",
-    )
-    artifacts_to_add: List[str] = Field(
-        default_factory=list,
-        description="Artifact filenames expected to exist after implementing this improvement.",
-    )
+    type: ImprovementKind
+    description: str
+    rationale: str
+    acceptance_criteria: List[str] = Field(default_factory=list)
+    risk: RiskLevel = "low"
+    artifacts_to_add: List[str] = Field(default_factory=list)
 
 
 class ToolSuggestion(BaseModel):
     """Suggestion for running an additional registry tool during improvements."""
 
-    tool_name: str = Field(..., description="Name of the registry tool to execute for additional data.")
-    reasoning: str = Field(
-        ..., description="Reason the evaluator believes this tool adds value."
-    )
-    expected_output_key: Optional[str] = Field(
-        None,
-        description="Optional semantic key name for storing the tool output in state.",
-    )
-    minimal_params: Dict[str, Any] = Field(
-        default_factory=dict,
-        description="Minimal parameter payload to run the suggested tool successfully.",
-    )
+    tool_name: str
+    reasoning: str
 
 
 class EvalReport(BaseModel):
     """Evaluator output capturing improvements, research plan, and tool ideas."""
 
-    improvements: List[ImprovementItem] = Field(
+    improvements: List[Improvement] = Field(default_factory=list)
+    research_goal: Optional[str] = ""
+    research_queries: List[ResearchQuery] = Field(default_factory=list)
+    new_tool_suggestions: List[ToolSuggestion] = Field(default_factory=list)
+    notes: str = ""
+
+
+class ToolNamePick(BaseModel):
+    """Tool name recommendation with reasoning."""
+    tool_name: str = Field(..., description="Exact registry tool name")
+    reasoning: str = Field(..., description="Concise justification for recommendation")
+
+
+class ToolRecommendationResponse(BaseModel):
+    """LLM response for tool name recommendations."""
+    recommendations: List[ToolNamePick] = Field(
         default_factory=list,
-        description="Actionable improvements the agent should attempt next.",
-    )
-    research: ResearchPlan = Field(
-        ..., description="Research plan that should be executed before further code changes."
-    )
-    new_tool_suggestions: List[ToolSuggestion] = Field(
-        default_factory=list,
-        description="Additional tools the agent might run for deeper context.",
-    )
-    notes: str = Field(
-        "",
-        description="Any evaluator notes that do not fit into the structured fields above.",
+        description="List of recommended tools with reasoning"
     )
 
 
@@ -827,7 +649,8 @@ Your job now:
 1) Read the user request, current manifest summary, execution stdout/stderr, any warnings, dataset summaries and assumptions.
 2) Produce a high-signal EvalReport that includes:
    - improvements: actionable deltas (code/result/data/validation/visualization/infra)
-   - research plan: prioritized ResearchQueryItem objects that Tavily will run
+   - research_goal: short statement of the research objective (optional)
+   - research_queries: prioritized ResearchQuery objects Tavily will run
    - new_tool_suggestions: registry tools to add value (optional)
    - notes: concise evaluator notes
 3) Your research questions should reflect these themes:
@@ -836,51 +659,52 @@ Your job now:
    * What unique/better data sources could we use (and licensing constraints)?
    * How to validate/challenge our methodology (robustness, alternative specs, benchmarks)?
    * What risk controls or portfolio construction knobs could reduce drawdown?
-4) Each research query should be concrete, include 1-5 high-signal query_strings,
-   with optional include/exclude domains and recency_days if relevant.
+4) Each research query should be concrete, include 1-5 high-signal entries in `queries`,
+   surface optional include/exclude domains or recency_days when relevant, and set `k` (max results).
 
 Return ONLY JSON conforming to the EvalReport schema. Do NOT include any extra text.
 """
 
 
-def _eval_input_from_state(state: "AgentState") -> EvalNodeInput:
+def _eval_input_from_state(state: "AgentState") -> Dict[str, Any]:
     """Transform agent state into the structured payload required by eval_report_node."""
 
-    dsums: List[DatasetSummary] = []
     tool_outputs = state.get("tool_outputs", {}) or {}
+    datasets: List[Dict[str, Any]] = []
     for key, desc in tool_outputs.items():
         if not desc:
             continue
-        dsums.append(
-            DatasetSummary(
-                key=key,
-                file_path=desc.get("file_path") or "",
-                rows=int(desc.get("rows") or 0),
-                columns=int(desc.get("columns") or 0),
-                dtypes=desc.get("dtypes") or {},
-                nulls=desc.get("nulls") or {},
-                date_start=desc.get("date_start"),
-                date_end=desc.get("date_end"),
-                sample_head=desc.get("sample_head") or [],
-            )
+        datasets.append(
+            {
+                "key": key,
+                "file_path": desc.get("file_path") or "",
+                "rows": int(desc.get("rows") or 0),
+                "columns": int(desc.get("columns") or 0),
+                "dtypes": desc.get("dtypes") or {},
+                "nulls": desc.get("nulls") or {},
+                "date_start": desc.get("date_start"),
+                "date_end": desc.get("date_end"),
+                "sample_head": desc.get("sample_head") or [],
+            }
         )
 
-    return EvalNodeInput(
-        user_request=state.get("user_input", ""),
-        manifest_summary=state.get("manifest_summary", {}),
-        execution_result=state.get("execution_result", {}),
-        warnings=state.get("warnings", []),
-        datasets=dsums,
-        assumptions=state.get("assumptions", []),
-    )
+    return {
+        "user_request": state.get("user_input", ""),
+        "manifest_summary": state.get("manifest_summary", {}),
+        "execution_result": state.get("execution_result", {}),
+        "warnings": state.get("warnings", []),
+        "datasets": datasets,
+        "assumptions": state.get("assumptions", []),
+    }
 
 
 TAVILY_QA_SYSTEM = """
 You are a research assistant using Tavily web search via function-calling.
-For the given research query, first CALL the 'tavily_search' tool with the most appropriate 'query' from query_strings.
+For the given research query, first CALL the 'tavily_search' tool with the most appropriate 'query' from the provided list of queries.
 - Use 'advanced' search_depth for non-trivial topics.
 - Prefer <= 7 results from credible domains. Use include/exclude domains if provided.
 - Use recency_days only when time-sensitive.
+- Set `max_results` to match the provided `k` value.
 After tool results are added back to the conversation, you will be asked to synthesize findings with citations.
 """
 
@@ -951,16 +775,12 @@ class AgentState(TypedDict):
     # Phase 3 additions (ingestion)
     run_dir: str
     result_manifest: Any
-    # Iteration-scoped execution + manifest
-    planning_turn: int
-    plan_history: List[List[Dict[str, Any]]]
-    assumptions: List[Dict[str, Any]]
-    stop_reason: str
     iteration_workdirs: List[str]
     final_manifest_path: str
     exec_workdir: str
     manifest_ok: bool
     iteration_manifests: List[Any]
+    iteration_index: int
     # Multi-turn planner fields
     planning_turn: int
     plan_history: List[List[Dict[str, Any]]]
@@ -972,6 +792,11 @@ class AgentState(TypedDict):
     delta_tool_outputs: Dict[str, Any]
     improvement_round: int
     should_finalize_after_eval: bool
+    # Unused tools tracking fields
+    unused_tool_picks: List[Dict[str, str]]
+    unused_tool_files: Dict[str, str]
+    unused_tool_outputs: Dict[str, Dict[str, Any]]
+    unused_tool_names: List[str]
 
 ######################################################################
 # OpenAI Function Definitions (Provided via Registry)
@@ -1261,7 +1086,7 @@ Call the select_tools function with your selection."""
         raise RuntimeError("Tool call missing arguments")
     result = json.loads(fn_args)
     
-    state["selected_tools"] = result["selected_tools"]
+    state["selected_tools"] = _order_preserving_dedupe(result["selected_tools"])
     print(result["reasoning"])
     logger.info(f"Selected tools: {result['selected_tools']}")
     
@@ -1442,53 +1267,42 @@ def llm_tool_orchestration_node(state: AgentState) -> AgentState:
 
         # Execute batch (cached / parallel)
         records = asyncio.run(GLOBAL_TOOL_EXECUTOR.execute_many(planned))
+        files_delta: Dict[str, str] = {}
+        outputs_delta: Dict[str, Dict[str, Any]] = {}
+        executed_tool_names = [name for name, _ in planned]
         # Update executed sigs and attach artifacts
-        outputs_delta: Dict[str, Any] = {}
         for rec in records:
             executed_sigs.add(rec.get("sig"))
             sem_key = rec.get("sem_key")
             path = rec.get("artifact_path")
             state["tool_artifacts"].append(rec)
             if sem_key and path:
-                state["tool_files"][sem_key] = path
-                try:
-                    df = pd.read_parquet(path)
-                    rows = int(len(df))
-                    cols = int(len(df.columns))
-                    dtypes = {str(k): str(v) for k, v in df.dtypes.to_dict().items()}
-                    nulls = {str(k): int(v) for k, v in df.isna().sum().to_dict().items()}
-                    date_start = date_end = None
-                    if "date" in df.columns:
-                        s_all = pd.to_datetime(df["date"], errors="coerce").dropna()
-                        if not s_all.empty:
-                            try:
-                                is_midnight = ((s_all.dt.hour.fillna(0) == 0) & (s_all.dt.minute.fillna(0) == 0) & (s_all.dt.second.fillna(0) == 0)).all()
-                            except Exception:
-                                is_midnight = False
-                            fmt = "%Y-%m-%d" if is_midnight else "%Y-%m-%d %H:%M:%S"
-                            date_start = s_all.min().strftime(fmt)
-                            date_end = s_all.max().strftime(fmt)
-                    head_df = df.head(5).copy()
-                    for c in head_df.columns:
-                        if pd.api.types.is_datetime64_any_dtype(head_df[c]):
-                            head_df[c] = pd.to_datetime(head_df[c], errors="coerce").dt.strftime("%Y-%m-%d %H:%M:%S")
-                    sample_head = head_df.to_dict(orient="records")
-                    outputs_delta[sem_key] = {
-                        "ok": True,
-                        "file_path": path,
-                        "rows": rows,
-                        "columns": cols,
-                        "dtypes": dtypes,
-                        "nulls": nulls,
-                        "date_start": date_start,
-                        "date_end": date_end,
-                        "sample_head": sample_head,
-                    }
-                except Exception as e:
-                    outputs_delta[sem_key] = {"ok": False, "file_path": path, "error": str(e)}
+                files_delta[sem_key] = path
+                outputs_delta[sem_key] = _build_dataset_descriptor(path)
 
-        # Merge new outputs
-        state["tool_outputs"].update(outputs_delta)
+        if files_delta or outputs_delta:
+            warnings = state.setdefault("warnings", [])
+            if files_delta:
+                store_files = state.setdefault("tool_files", {})
+                for key, new_path in files_delta.items():
+                    old_path = store_files.get(key)
+                    if old_path and old_path != new_path:
+                        warnings.append(f"Semantic key {key} file changed from {old_path} to {new_path}")
+                    store_files[key] = new_path
+            if outputs_delta:
+                store_outputs = state.setdefault("tool_outputs", {})
+                expected_fields = {"ok", "file_path", "rows", "columns", "dtypes", "nulls", "date_start", "date_end", "sample_head"}
+                for key, payload in outputs_delta.items():
+                    old_payload = store_outputs.get(key)
+                    if old_payload:
+                        old_path = old_payload.get("file_path")
+                        new_path = payload.get("file_path")
+                        if old_path and new_path and old_path != new_path:
+                            warnings.append(f"Semantic key {key} file changed from {old_path} to {new_path}")
+                    missing = sorted(list(expected_fields - set(payload.keys())))
+                    if missing:
+                        warnings.append(f"Semantic key {key} missing fields: {', '.join(missing)}")
+                    store_outputs[key] = payload
         # Provide summaries back to the planner
         messages.append({
             "role": "user",
@@ -1533,7 +1347,12 @@ def build_manifest_node(state: AgentState) -> AgentState:
 
     # Determine iteration working directory
     run_dir = _ensure_data_dir(state)
-    iteration_index = int(state.get("reflection_count", 0) or 0) + int(state.get("improvement_round", 0) or 0)
+    iteration_index = state.get("iteration_index")
+    if iteration_index is None:
+        iteration_index = int(state.get("reflection_count", 0) or 0) + int(state.get("improvement_round", 0) or 0)
+    else:
+        iteration_index = int(iteration_index)
+    state["iteration_index"] = iteration_index
     exec_workdir = os.path.join(run_dir, f"reflection_{iteration_index}")
     os.makedirs(exec_workdir, exist_ok=True)
     state["exec_workdir"] = exec_workdir
@@ -1608,17 +1427,41 @@ def eval_report_node(state: AgentState) -> AgentState:
     """Generate an evaluation report that guides post-manifest improvements."""
 
     logger.info("EvalReport: generating eval plan and research queries...")
-    eval_in = _eval_input_from_state(state).model_dump()
+    eval_in = _eval_input_from_state(state)
+
+    # Add unused tools analysis
+    selected_tools = set(state.get("selected_tools", []))
+    try:
+        all_available = set(REGISTRY.get_available_tools())
+        registry_schemas = REGISTRY.get_tool_schemas()
+    except Exception:
+        all_available = set()
+        registry_schemas = {}
+
+    unused_tools = all_available - selected_tools
+    unused_tools_context = ""
+    if unused_tools:
+        tool_descriptions = []
+        for tool_name in sorted(unused_tools):
+            if tool_name in registry_schemas:
+                schema = registry_schemas[tool_name]
+                desc = schema.get("description", "")
+                tool_descriptions.append(f"• {tool_name}: {desc}")
+        unused_tools_context = f"\nAVAILABLE UNUSED TOOLS:\n{chr(10).join(tool_descriptions)}"
+
+    # Enhanced evaluation prompt including unused tools
+    enhanced_eval_input = eval_in.copy()
+    enhanced_eval_input["unused_tools_context"] = unused_tools_context
+
     messages = [
-        {"role": "system", "content": EVAL_REPORT_SYSTEM},
-        {"role": "user", "content": json.dumps(eval_in, default=_json_default)},
+        {"role": "system", "content": EVAL_REPORT_SYSTEM + "\n\nAlso consider unused tools that could enhance the analysis.\nReturn ONLY a JSON object that strictly conforms to this JSON Schema: " + json.dumps(_model_schema(EvalReport))},
+        {"role": "user", "content": json.dumps(enhanced_eval_input, default=_json_default)},
     ]
 
     try:
         resp = openai_client.responses.create(
             model=OPENAI_MODEL,
             input=messages,
-            response_format={"type": "json_object"},
         )
         raw = _extract_text(resp)
         parsed = EvalReport.model_validate(json.loads(raw))
@@ -1626,34 +1469,36 @@ def eval_report_node(state: AgentState) -> AgentState:
         logger.warning(f"EvalReport parse failed: {exc}")
         parsed = EvalReport(
             improvements=[],
-            research=ResearchPlan(goal_statement="(fallback)", queries=[]),
+            research_goal="(fallback)",
+            research_queries=[],
             new_tool_suggestions=[],
             notes="(fallback)",
         )
 
     state["eval_report"] = parsed.model_dump()
-    has_actions = bool(parsed.improvements) or bool(parsed.research.queries) or bool(parsed.new_tool_suggestions)
+    has_actions = bool(parsed.improvements) or bool(parsed.research_queries) or bool(parsed.new_tool_suggestions)
     state["should_finalize_after_eval"] = not has_actions
     return state
 
 
-def _run_tavily_for_one_query(rq: ResearchQueryItem) -> QueryEvidence:
+def _run_tavily_for_one_query(rq: ResearchQuery, context: Dict[str, Any]) -> Evidence:
     """Execute Tavily research for a single query specification."""
 
     payload = {
         "query_id": rq.id,
         "question": rq.question,
-        "query_strings": rq.query_strings,
-        "include_domains": rq.include_domains,
-        "exclude_domains": rq.exclude_domains,
+        "queries": rq.queries,
         "recency_days": rq.recency_days,
-        "max_results": rq.max_results,
+        "k": rq.k,
+        "max_results": rq.k,
     }
 
     input_list: List[Dict[str, Any]] = [
         {"role": "system", "content": TAVILY_QA_SYSTEM},
         {"role": "user", "content": json.dumps(payload)},
     ]
+    if context:
+        input_list.append({"role": "user", "content": json.dumps({"context": context}, default=_json_default)})
 
     response = openai_client.responses.create(
         model=OPENAI_MODEL,
@@ -1662,14 +1507,17 @@ def _run_tavily_for_one_query(rq: ResearchQueryItem) -> QueryEvidence:
     )
     input_list.extend(response.output or [])
 
-    generated_query = rq.query_strings[0]
+    used_query = rq.queries[0]
     for item in response.output or []:
         if getattr(item, "type", "") == "function_call" and getattr(item, "name", "") == "tavily_search":
             try:
                 parsed_args = json.loads(item.arguments or "{}")
             except Exception:
                 parsed_args = {}
-            generated_query = parsed_args.get("query", generated_query)
+            if "max_results" not in parsed_args and "k" in parsed_args:
+                parsed_args["max_results"] = parsed_args.pop("k")
+            parsed_args.pop("k", None)
+            used_query = parsed_args.get("query", used_query)
             try:
                 results = tavily_search(**parsed_args)
                 input_list.append(
@@ -1693,29 +1541,28 @@ def _run_tavily_for_one_query(rq: ResearchQueryItem) -> QueryEvidence:
         input=input_list,
     )
 
-    docs: List[TavilyDoc] = []
+    docs: List[Dict[str, Any]] = []
     for msg in input_list:
         if isinstance(msg, dict) and msg.get("type") == "function_call_output":
             try:
                 payload = json.loads(msg["output"])
-                if isinstance(payload, dict):
-                    for d in payload.get("results", {}).get("results", []):
-                        docs.append(
-                            TavilyDoc(
-                                title=d.get("title", ""),
-                                url=d.get("url", ""),
-                                snippet=d.get("content") or d.get("snippet"),
-                                published_at=d.get("published_time"),
-                                score=d.get("score"),
-                            )
-                        )
             except Exception:
                 continue
+            if not isinstance(payload, dict):
+                continue
+            for d in payload.get("results", {}).get("results", []):
+                docs.append({
+                    "title": d.get("title", ""),
+                    "url": d.get("url", ""),
+                    "snippet": d.get("content") or d.get("snippet"),
+                    "published_at": d.get("published_time"),
+                    "score": d.get("score"),
+                })
 
     synthesis = _extract_text(response2)
-    return QueryEvidence(
+    return Evidence(
         query_id=rq.id,
-        generated_query=generated_query,
+        used_query=used_query,
         docs=docs,
         synthesis=synthesis,
         caveats=[],
@@ -1725,52 +1572,56 @@ def _run_tavily_for_one_query(rq: ResearchQueryItem) -> QueryEvidence:
 def tavily_research_node(state: AgentState) -> AgentState:
     """Execute Tavily research queries derived from the evaluation report."""
 
-    if state.get("should_finalize_after_eval"):
-        empty_bundle = ResearchEvidenceBundle(
-            plan=ResearchPlan(goal_statement="(no research needed)", queries=[]),
-            evidences=[],
-            global_summary="",
-            conflicting_findings=[],
-            recommended_actions=[],
-        )
-        state["tavily_results"] = empty_bundle.model_dump()
+    report_dict = state.get("eval_report") or {}
+    try:
+        report = EvalReport.model_validate(report_dict)
+    except Exception as exc:
+        logger.warning(f"EvalReport parse failed in tavily_research_node: {exc}")
+        report = EvalReport()
+
+    if state.get("should_finalize_after_eval") or not report.research_queries:
+        bundle = ResearchBundle(goal=report.research_goal, queries=[], evidences=[], summary="", conflicts=[], recommended_actions=[])
+        state["tavily_results"] = bundle.model_dump()
         return state
 
     if tavily_client is None:
         logger.warning("Tavily research unavailable; skipping evidence gathering.")
-        empty_bundle = ResearchEvidenceBundle(
-            plan=ResearchPlan(goal_statement="(skipped)", queries=[]),
-            evidences=[],
-            global_summary="",
-            conflicting_findings=[],
-            recommended_actions=[],
-        )
-        state["tavily_results"] = empty_bundle.model_dump()
+        bundle = ResearchBundle(goal=report.research_goal, queries=report.research_queries, evidences=[], summary="", conflicts=[], recommended_actions=[])
+        state["tavily_results"] = bundle.model_dump()
         return state
 
-    report_dict = state.get("eval_report", {}) or {}
-    plan_dict = (report_dict.get("research") or {})
-    try:
-        rq_items = [ResearchQueryItem.model_validate(item) for item in plan_dict.get("queries", [])]
-    except Exception as exc:
-        logger.warning(f"Failed to parse research queries: {exc}")
-        rq_items = []
-
-    evidences: List[QueryEvidence] = []
-    for rq in sorted(rq_items, key=lambda item: item.priority):
+    evidences: List[Evidence] = []
+    context_base = {
+        "user_request": state.get("user_input", ""),
+        "task_description": state.get("task_description", ""),
+        "research_goal": report.research_goal,
+        "evaluator_notes": report.notes,
+        "warnings": state.get("warnings", []),
+        "manifest_summary": state.get("manifest_summary", {}),
+        "execution_result": state.get("execution_result", {}),
+    }
+    for rq in sorted(report.research_queries, key=lambda item: item.priority):
         try:
-            evidences.append(_run_tavily_for_one_query(rq))
+            query_context = dict(context_base)
+            query_context.update({
+                "category": rq.category,
+                "intent": rq.intent,
+                "priority": rq.priority,
+                "include_domains": rq.include_domains,
+                "exclude_domains": rq.exclude_domains,
+                "recency_days": rq.recency_days,
+                "citations_required": rq.citations_required,
+            })
+            evidences.append(_run_tavily_for_one_query(rq, query_context))
         except Exception as exc:
             logger.warning(f"Tavily query failed for {rq.id}: {exc}")
 
-    bundle = ResearchEvidenceBundle(
-        plan=ResearchPlan(
-            goal_statement=plan_dict.get("goal_statement", ""),
-            queries=rq_items,
-        ),
+    bundle = ResearchBundle(
+        goal=report.research_goal,
+        queries=report.research_queries,
         evidences=evidences,
-        global_summary="",
-        conflicting_findings=[],
+        summary="",
+        conflicts=[],
         recommended_actions=[],
     )
     state["tavily_results"] = bundle.model_dump()
@@ -1784,63 +1635,196 @@ def extra_tool_exec_node(state: AgentState) -> AgentState:
     if state.get("should_finalize_after_eval"):
         state["delta_tool_outputs"] = {}
         return state
-    suggestions = (state.get("eval_report", {}) or {}).get("new_tool_suggestions", [])
-    if not suggestions:
-        state["delta_tool_outputs"] = {}
-        return state
 
     try:
-        schemas = REGISTRY.get_tool_schemas()
-    except Exception:
-        schemas = {}
+        # Get evaluation suggestions
+        suggestions = (state.get("eval_report", {}) or {}).get("new_tool_suggestions", [])
+        if not suggestions:
+            state["delta_tool_outputs"] = {}
+            return state
 
-    executed: Dict[str, Any] = {}
-    for suggestion in suggestions:
         try:
-            ts = ToolSuggestion.model_validate(suggestion)
+            registry_schemas = REGISTRY.get_tool_schemas()
         except Exception:
-            continue
+            registry_schemas = {}
 
-        if ts.tool_name not in schemas:
-            continue
+        # Build tool definitions for function calling
+        tool_defs = []
+        tool_names = []
+        for suggestion in suggestions:
+            try:
+                ts = ToolSuggestion.model_validate(suggestion)
+                tool_name = ts.tool_name
+                if tool_name in registry_schemas:
+                    sch = registry_schemas[tool_name]
+                    tool_defs.append({
+                        "type": "function",
+                        "name": sch.get("name", tool_name),
+                        "description": sch.get("description", ""),
+                        "parameters": sch.get("parameters", {}),
+                    })
+                    tool_names.append(tool_name)
+            except Exception:
+                continue
 
-        schema = schemas[ts.tool_name]["parameters"]
-        sys_prompt = (
-            "You are parameterizing this tool call.\n"
-            f"Tool: {ts.tool_name}\n"
-            f"Schema: {json.dumps(schema)}\n"
-            f"User request: {state.get('user_input')}\n"
-            f"Manifest summary: {json.dumps(state.get('manifest_summary', {}))}\n"
-            "Return ONLY valid JSON args for this schema. No commentary."
+        if not tool_defs:
+            state["delta_tool_outputs"] = {}
+            return state
+
+        # LLM parameterization prompt
+        plan_sys = (
+            "You are a data extraction planner for newly suggested tools.\n"
+            "- Use ONLY the provided tools that were suggested by the evaluator.\n"
+            "- Fill parameters based on the user request, generated code, and dataset context.\n"
+            "- If parameters are ambiguous, adopt explicit assumptions and continue.\n"
+            "- These tools will supplement the existing analysis.\n"
+            "Return planned tool function calls directly via function-calling."
         )
 
-        try:
+        user_content_parts = [
+            f"User request: {state.get('user_input','')}",
+            f"Task description: {state.get('task_description','')}",
+            f"Suggested tools to parameterize: {', '.join(tool_names)}",
+        ]
+
+        code_context = _code_context_snippet(state)
+        if code_context:
+            user_content_parts.append("Current generated code context:\n```python\n" + code_context + "\n```")
+
+        messages = [
+            {"role": "system", "content": plan_sys},
+            {"role": "user", "content": "\n".join(user_content_parts)},
+        ]
+
+        # Multi-turn execution loop
+        executed_sigs = set()
+        calls_log = []
+        new_outputs_delta = {}
+        new_files_delta = {}
+        executed_tool_names = []
+        MAX_TURNS = 2
+
+        for turn in range(1, MAX_TURNS + 1):
+            logger.info(f"Tool execution turn {turn} ...")
+
             resp = openai_client.responses.create(
                 model=OPENAI_MODEL,
-                input=[{"role": "system", "content": sys_prompt}],
-                response_format={"type": "json_object"},
+                reasoning={"effort": "medium"},
+                input=messages,
+                tools=tool_defs,
+                tool_choice="auto",
             )
-            args = json.loads(_extract_text(resp))
-        except Exception as exc:
-            logger.warning(f"Parameter generation failed for {ts.tool_name}: {exc}")
-            continue
 
-        if GLOBAL_TOOL_EXECUTOR is None:
-            logger.warning("GLOBAL_TOOL_EXECUTOR not initialized; skipping tool execution.")
-            continue
+            items = resp.output or []
+            tool_calls = [it for it in items if getattr(it, "type", None) == "function_call"]
+            if not tool_calls:
+                break
 
-        try:
-            records = asyncio.run(GLOBAL_TOOL_EXECUTOR.execute_many([(ts.tool_name, args)]))
-        except Exception as exc:
-            logger.warning(f"Tool execution failed for {ts.tool_name}: {exc}")
-            continue
+            # Build and validate plan
+            planned = []
+            issues_report = []
 
-        for rec in records:
-            sem_key = rec.get("sem_key") or ts.expected_output_key or ts.tool_name
-            executed[sem_key] = rec
+            for tc in tool_calls:
+                tool_name = getattr(tc, "name", None) or (getattr(tc, "function", None).name if getattr(tc, "function", None) else None)
+                if not tool_name or tool_name not in registry_schemas:
+                    continue
 
-    state["delta_tool_outputs"] = executed
-    return state
+                try:
+                    if hasattr(tc, "arguments"):
+                        raw_args = tc.arguments
+                    elif hasattr(tc, "function") and getattr(tc.function, "arguments", None):
+                        raw_args = tc.function.arguments
+                    else:
+                        raw_args = "{}"
+                    args = json.loads(raw_args) if raw_args else {}
+                except Exception:
+                    args = {}
+
+                ok, fixed, issues = REGISTRY.validate(tool_name, args)
+                use_args = fixed or args
+                sem_key = REGISTRY.get_semantic_key(tool_name)
+                sig = params_signature(tool_name, use_args)
+
+                calls_log.append({
+                    "tool": tool_name,
+                    "semantic_key": sem_key,
+                    "args": use_args,
+                    "param_issues": issues or []
+                })
+
+                if issues and not fixed and not ok:
+                    issues_report.append({"tool": tool_name, "provided": args, "issues": issues})
+                else:
+                    planned.append((tool_name, use_args))
+
+            if not planned:
+                if issues_report:
+                    messages.append({
+                        "role": "user",
+                        "content": "VALIDATION_REPORT: " + json.dumps(issues_report),
+                    })
+                    continue
+                else:
+                    break
+
+            # Check stability
+            planned_sigs = {params_signature(n, p) for n, p in planned}
+            if planned_sigs.issubset(executed_sigs):
+                break
+
+            # Execute tools
+            if GLOBAL_TOOL_EXECUTOR is None:
+                logger.warning("GLOBAL_TOOL_EXECUTOR not initialized; skipping execution phase.")
+                break
+
+            records = asyncio.run(GLOBAL_TOOL_EXECUTOR.execute_many(planned))
+
+            # Process results and build summaries
+            for rec in records:
+                executed_sigs.add(rec.get("sig"))
+                sem_key = rec.get("sem_key")
+                path = rec.get("artifact_path")
+                tool_name = rec.get("tool")
+
+                if tool_name:
+                    executed_tool_names.append(tool_name)
+
+                if sem_key and path:
+                    new_files_delta[sem_key] = path
+                    new_outputs_delta[sem_key] = _build_dataset_descriptor(path)
+
+            # Provide summaries back to planner
+            if new_outputs_delta:
+                messages.append({
+                    "role": "user",
+                    "content": "TOOL_OUTPUTS_JSON: " + json.dumps(new_outputs_delta, default=_json_default),
+                })
+
+        # DUAL STATE TRACKING (Your exact pattern)
+        state["unused_tool_picks"] = calls_log
+        state["unused_tool_files"] = new_files_delta
+        state["unused_tool_outputs"] = new_outputs_delta
+        state["unused_tool_names"] = list(set(executed_tool_names))
+
+        # Merge into main state (SAME as orchestrator)
+        state.setdefault("tool_files", {}).update(new_files_delta)
+        state.setdefault("tool_outputs", {}).update(new_outputs_delta)
+        state["selected_tools"] = state.get("selected_tools", []) + state["unused_tool_names"]
+
+        # Also set delta_tool_outputs for compatibility with existing workflow
+        state["delta_tool_outputs"] = new_outputs_delta
+
+        logger.info(f"New tools executed: {state['unused_tool_names']}")
+        return state
+
+    except Exception as e:
+        logger.error(f"Tool execution failed: {e}")
+        state["unused_tool_picks"] = []
+        state["unused_tool_files"] = {}
+        state["unused_tool_outputs"] = {}
+        state["unused_tool_names"] = []
+        state["delta_tool_outputs"] = {}
+        return state
 
 
 def delta_code_gen_node(state: AgentState) -> AgentState:
@@ -1855,12 +1839,13 @@ def delta_code_gen_node(state: AgentState) -> AgentState:
         "eval_report": state.get("eval_report", {}),
         "tavily_results": state.get("tavily_results", {}),
         "delta_tool_outputs": list((state.get("delta_tool_outputs", {}) or {}).keys()),
+        "unused_tool_outputs": list((state.get("unused_tool_outputs", {}) or {}).keys()),
         "current_code_excerpt": state.get("generated_code", "")[:2000],
         "manifest_summary": state.get("manifest_summary", {}),
         "warnings": state.get("warnings", []),
     }
     messages = [
-        {"role": "system", "content": DELTA_CODE_SYSTEM},
+        {"role": "system", "content": DELTA_CODE_SYSTEM + "\nReturn ONLY a JSON object that strictly conforms to this JSON Schema: " + json.dumps(_model_schema(DeltaCodePatch))},
         {"role": "user", "content": json.dumps(payload, default=_json_default)},
     ]
 
@@ -1868,7 +1853,6 @@ def delta_code_gen_node(state: AgentState) -> AgentState:
         resp = openai_client.responses.create(
             model=OPENAI_MODEL,
             input=messages,
-            response_format={"type": "json_object"},
         )
         raw = _extract_text(resp)
         patch = DeltaCodePatch.model_validate(json.loads(raw))
@@ -2074,6 +2058,7 @@ def execute_code_node(state: AgentState) -> AgentState:
         # Prepare per-iteration execution working directory
         run_dir = _ensure_data_dir(state)
         iteration_index = int(state.get("reflection_count", 0) or 0) + int(state.get("improvement_round", 0) or 0)
+        state["iteration_index"] = iteration_index
         exec_workdir = os.path.join(run_dir, f"reflection_{iteration_index}")
         os.makedirs(exec_workdir, exist_ok=True)
         state.setdefault("iteration_workdirs", [])
@@ -2226,74 +2211,81 @@ def should_continue_improving(state: AgentState) -> str:
     return "eval_report"
 
 
+def post_execute_router(state: AgentState) -> str:
+    """Route after code execution to reflection or manifest building."""
+
+    success = bool(state.get("execution_result", {}).get("success"))
+    if success:
+        return "build_manifest"
+    if state.get("reflection_count", 0) < MAX_REFLECTION_ATTEMPTS:
+        return "reflect_code"
+    return "finalize"
+
+
 def post_manifest_router(state: AgentState) -> str:
     """Route the workflow after a manifest build completes."""
 
-    success = bool(state.get("execution_result", {}).get("success"))
-    manifest_ok = bool(state.get("manifest_ok", success))
-    if not success or not manifest_ok:
-        if state.get("reflection_count", 0) < MAX_REFLECTION_ATTEMPTS:
-            return "reflect_code"
+    if not state.get("manifest_ok"):
         return "finalize"
     return should_continue_improving(state)
 
-def create_base_workflow(retriever: FewShotRetriever) -> StateGraph:
-    """Create the LangGraph workflow."""
-    
-    # Create workflow graph
-    workflow = StateGraph(AgentState)
-    
-    # Add nodes
-    workflow.add_node("select_tools", select_tools_node)
-    workflow.add_node("llm_tool_orchestration", llm_tool_orchestration_node)
-    workflow.add_node("collect_tool_outputs", collect_tool_outputs_node)
-    workflow.add_node("generate_intermediate_context", generate_intermediate_context_node)
-    workflow.add_node("retrieve_few_shots", lambda state: retrieve_few_shots_node(state, retriever))
-    workflow.add_node("create_prompt", create_prompt_node)
-    workflow.add_node("generate_code", generate_code_node)
-    workflow.add_node("execute_code", execute_code_node)
-    workflow.add_node("build_manifest", build_manifest_node)
-    workflow.add_node("reflect_code", reflect_code_node)
-    workflow.add_node("finalize", finalize_node)
-    
-    # Add edges
-    workflow.add_edge(START, "select_tools")
-    workflow.add_edge("select_tools", "llm_tool_orchestration")
-    workflow.add_edge("llm_tool_orchestration", "collect_tool_outputs")
-    workflow.add_edge("collect_tool_outputs", "retrieve_few_shots")
-    workflow.add_edge("retrieve_few_shots", "generate_intermediate_context")
-    workflow.add_edge("generate_intermediate_context", "create_prompt")
-    workflow.add_edge("create_prompt", "generate_code")
-    workflow.add_edge("generate_code", "execute_code")
-    workflow.add_edge("execute_code", "build_manifest")
-    workflow.add_edge("reflect_code", "execute_code")  # Re-execute after reflection
-    workflow.add_edge("finalize", END)
+def create_workflow(retriever: FewShotRetriever) -> StateGraph:
+    """Create the LangGraph workflow with reflection and improvement loop."""
 
-    return workflow
+    wf = StateGraph(AgentState)
 
+    # Core generation path
+    wf.add_node("select_tools", select_tools_node)
+    wf.add_node("llm_tool_orchestration", llm_tool_orchestration_node)
+    wf.add_node("collect_tool_outputs", collect_tool_outputs_node)
+    wf.add_node("retrieve_few_shots", lambda state: retrieve_few_shots_node(state, retriever))
+    wf.add_node("generate_intermediate_context", generate_intermediate_context_node)
+    wf.add_node("create_prompt", create_prompt_node)
+    wf.add_node("generate_code", generate_code_node)
+    wf.add_node("execute_code", execute_code_node)
+    wf.add_node("build_manifest", build_manifest_node)
+    wf.add_node("reflect_code", reflect_code_node)
+    wf.add_node("finalize", finalize_node)
 
-def create_workflow_with_improvements(retriever: FewShotRetriever) -> StateGraph:
-    """Augment the base workflow with the post-manifest improvement loop."""
-
-    wf = create_base_workflow(retriever)
-
+    # Improvement loop nodes
     wf.add_node("eval_report", eval_report_node)
     wf.add_node("tavily_research", tavily_research_node)
     wf.add_node("extra_tool_exec", extra_tool_exec_node)
     wf.add_node("delta_code_gen", delta_code_gen_node)
 
+    # Linear edges for core flow
+    wf.add_edge(START, "select_tools")
+    wf.add_edge("select_tools", "llm_tool_orchestration")
+    wf.add_edge("llm_tool_orchestration", "collect_tool_outputs")
+    wf.add_edge("collect_tool_outputs", "retrieve_few_shots")
+    wf.add_edge("retrieve_few_shots", "generate_intermediate_context")
+    wf.add_edge("generate_intermediate_context", "create_prompt")
+    wf.add_edge("create_prompt", "generate_code")
+    wf.add_edge("generate_code", "execute_code")
+    wf.add_edge("reflect_code", "execute_code")  # retry after fixes
+    wf.add_edge("delta_code_gen", "execute_code")
     wf.add_edge("eval_report", "tavily_research")
     wf.add_edge("tavily_research", "extra_tool_exec")
     wf.add_edge("extra_tool_exec", "delta_code_gen")
-    wf.add_edge("delta_code_gen", "execute_code")
-    wf.add_edge("execute_code", "build_manifest")
+    wf.add_edge("finalize", END)
 
+    # Route execution failures to reflection before manifest work
+    wf.add_conditional_edges(
+        "execute_code",
+        post_execute_router,
+        {
+            "build_manifest": "build_manifest",
+            "reflect_code": "reflect_code",
+            "finalize": "finalize",
+        },
+    )
+
+    # Decide on iterative improvement after each successful manifest
     wf.add_conditional_edges(
         "build_manifest",
         post_manifest_router,
         {
             "finalize": "finalize",
-            "reflect_code": "reflect_code",
             "eval_report": "eval_report",
         },
     )
@@ -2316,7 +2308,7 @@ class DataAnalyticsAgent:
         fs_dir = few_shots_dir or default_fs_dir
         self.few_shot_retriever = FewShotRetriever(fs_dir)
         # Registry is initialized globally as REGISTRY
-        self.workflow = create_workflow_with_improvements(self.few_shot_retriever)
+        self.workflow = create_workflow(self.few_shot_retriever)
         self.app = self.workflow.compile()
         # Base data directory and async executor
         base_dir = os.environ.get("AGENT_DATA_DIR", os.path.join(os.getcwd(), ".agent_data"))
@@ -2363,11 +2355,29 @@ class DataAnalyticsAgent:
             run_id=str(uuid.uuid4()),
             warnings=[],
             iteration_manifests=[],
+            iteration_index=0,
             eval_report={},
             tavily_results={},
             delta_tool_outputs={},
             improvement_round=0,
             should_finalize_after_eval=False,
+            # Unused tools tracking fields
+            unused_tool_picks=[],
+            unused_tool_files={},
+            unused_tool_outputs={},
+            unused_tool_names=[],
+            # Critical missing field initializations
+            tool_artifacts=[],
+            result_manifest=None,
+            iteration_workdirs=[],
+            final_manifest_path="",
+            exec_workdir="",
+            manifest_ok=False,
+            planning_turn=0,
+            plan_history=[],
+            assumptions=[],
+            stop_reason="",
+            run_dir="",
         )
         # Provide base_data_dir in state for directory resolution
         initial_state["base_data_dir"] = getattr(self, "base_data_dir", os.environ.get("AGENT_DATA_DIR", os.path.join(os.getcwd(), ".agent_data")))
