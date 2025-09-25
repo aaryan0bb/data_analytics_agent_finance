@@ -610,6 +610,82 @@ class ToolRecommendationResponse(BaseModel):
     )
 
 
+# === Subpart 2: Concrete Actions and Delta Planning ===
+class TavilyAction(BaseModel):
+    """Concrete, locally-computable research action.
+
+    - Use only local data keys present in tool_outputs.
+    - If not_computable_from_local is True, the action will be discarded.
+    - If new_column is provided, transform must describe how to compute it.
+    """
+
+    id: str = Field(..., min_length=3, description="Stable identifier for this action")
+    new_column: Optional[str] = Field(
+        default=None, min_length=2, description="Name of a new feature column to create"
+    )
+    transform: str = Field(
+        ..., min_length=10, description="Pseudo-code transformation using only local columns"
+    )
+    requires_keys: List[str] = Field(
+        ..., min_items=1, description="Local dataset keys required to compute this action"
+    )
+    add_metrics: Dict[str, float] = Field(
+        default_factory=dict, description="Metrics to add/update in result.json"
+    )
+    not_computable_from_local: bool = Field(
+        default=False, description="Set True if this action cannot be computed from local artifacts"
+    )
+    confidence: float = Field(
+        default=0.5, ge=0.0, le=1.0, description="Self-assessed confidence in [0,1]"
+    )
+
+    @validator("requires_keys")
+    def _clean_requires_keys(cls, v: List[str]) -> List[str]:
+        out: List[str] = []
+        seen: set[str] = set()
+        for item in v:
+            s = (item or "").strip()
+            if not s:
+                continue
+            if s in seen:
+                continue
+            out.append(s)
+            seen.add(s)
+        if not out:
+            raise ValueError("requires_keys must contain at least one non-empty value")
+        return out
+
+    @validator("transform")
+    def _transform_minimum(cls, v: str) -> str:
+        if len((v or "").strip()) < 10:
+            raise ValueError("transform must be at least 10 characters")
+        return v
+
+    @validator("new_column")
+    def _new_col_rules(cls, v: Optional[str], values):
+        # If new_column supplied, we still require transform to be present (enforced above)
+        return v
+
+
+class DeltaPlan(BaseModel):
+    """Concrete plan of additive changes for the delta phase.
+
+    Only artifacts/metrics computable from local data should be included.
+    """
+
+    add_tables: List[str] = Field(default_factory=list, description="Paths of new tables to create")
+    add_figures: List[str] = Field(default_factory=list, description="Paths of new figures to create")
+    add_metrics: Dict[str, float] = Field(default_factory=dict, description="Metrics to add/update")
+    uses_existing_keys: List[str] = Field(default_factory=list, description="Local data keys referenced")
+    new_columns: List[str] = Field(default_factory=list, description="New column names to create")
+    acceptance_checks: List[str] = Field(default_factory=list, description="Simple acceptance checks to evaluate post-run")
+
+
+class EvalBundle(BaseModel):
+    eval_report: EvalReport
+    delta_plan: DeltaPlan
+
+
 class DeltaCodePatch(BaseModel):
     """Structured response for delta code generation during improvement rounds."""
 
@@ -781,6 +857,9 @@ class AgentState(TypedDict):
     # Post-manifest improvement loop fields
     eval_report: Dict[str, Any]
     tavily_results: Dict[str, Any]
+    actions_synthesis: List[Dict[str, Any]]
+    delta_plan: Dict[str, Any]
+    eval_bundle: Dict[str, Any]
     delta_tool_outputs: Dict[str, Any]
     improvement_round: int
     should_finalize_after_eval: bool
@@ -1653,12 +1732,14 @@ def tavily_research_node(state: AgentState) -> AgentState:
     if state.get("should_finalize_after_eval") or not report.research_queries:
         bundle = ResearchBundle(goal=report.research_goal, queries=[], evidences=[], summary="", conflicts=[], recommended_actions=[])
         state["tavily_results"] = bundle.model_dump()
+        # No actions synthesis if we aren't running Tavily
         return state
 
     if tavily_client is None:
         logger.warning("Tavily research unavailable; skipping evidence gathering.")
         bundle = ResearchBundle(goal=report.research_goal, queries=report.research_queries, evidences=[], summary="", conflicts=[], recommended_actions=[])
         state["tavily_results"] = bundle.model_dump()
+        # No actions synthesis if Tavily is unavailable
         return state
 
     evidences: List[Evidence] = []
@@ -1696,6 +1777,168 @@ def tavily_research_node(state: AgentState) -> AgentState:
         recommended_actions=[],
     )
     state["tavily_results"] = bundle.model_dump()
+
+    # --- Actions Synthesis (binary: TavilyAction[] or NO_ACTION) ---
+    try:
+        # Prepare local keys/columns summary for grounding
+        tool_desc = state.get("tool_outputs", {}) or {}
+        local_keys_summary: List[Dict[str, Any]] = []
+        for k, d in tool_desc.items():
+            dtypes = d.get("dtypes") or {}
+            cols = list(dtypes.keys()) if isinstance(dtypes, dict) else []
+            local_keys_summary.append({
+                "key": k,
+                "columns": cols,
+                "rows": int(d.get("rows") or 0),
+                "date_start": d.get("date_start"),
+                "date_end": d.get("date_end"),
+            })
+
+        # Compact evidence summary for the LLM
+        ev_summ = []
+        for ev in evidences:
+            ev_summ.append({
+                "query_id": ev.query_id,
+                "used_query": ev.used_query,
+                "n_docs": len(ev.docs),
+            })
+
+        ACTIONS_SYSTEM = """
+You are a strict planner that proposes only concrete, locally-computable actions.
+Return ONLY JSON: either (1) an array of TavilyAction objects OR (2) the literal string NO_ACTION.
+Rules:
+- Use only local data keys and columns provided in the context.
+- Actions must be computable without new network calls.
+- Up to 3 high-confidence actions; if nothing computable, return NO_ACTION.
+"""
+
+        # Build a schema for an array of TavilyAction
+        ta_schema = _model_schema(TavilyAction)
+        arr_schema = {"type": "array", "items": ta_schema, "minItems": 0, "maxItems": 5}
+        sys_msg = ACTIONS_SYSTEM + "\nReturn ONLY a JSON value that strictly conforms to this JSON Schema (or the string NO_ACTION):\n" + json.dumps(arr_schema)
+
+        payload = {
+            "user_request": state.get("user_input", ""),
+            "research_goal": report.research_goal,
+            "manifest_summary": state.get("manifest_summary", {}),
+            "warnings": state.get("warnings", []),
+            "local_keys": local_keys_summary,
+            "tavily_evidence_summary": ev_summ,
+        }
+
+        resp = openai_client.responses.create(
+            model=OPENAI_MODEL,
+            input=[
+                {"role": "system", "content": sys_msg},
+                {"role": "user", "content": json.dumps(payload, default=_json_default)},
+            ],
+        )
+        raw = _extract_text(resp)
+        txt = (raw or "").strip()
+        logger.debug(f"Action synthesis raw: {txt}")
+
+        actions: List[TavilyAction] = []
+        if txt == "NO_ACTION" or txt.strip('"') == "NO_ACTION":
+            actions = []
+        else:
+            try:
+                arr = json.loads(txt)
+                if isinstance(arr, list):
+                    for i, item in enumerate(arr):
+                        try:
+                            actions.append(TavilyAction.model_validate(item))
+                        except Exception as ve:
+                            logger.debug(f"Dropping invalid action[{i}]: {ve}")
+                else:
+                    logger.info("Action synthesis returned non-list JSON; treating as NO_ACTION.")
+                    actions = []
+            except Exception as pe:
+                logger.info(f"Action synthesis JSON parse failed; treating as NO_ACTION: {pe}")
+                actions = []
+
+        # Validate actions against local keys
+        known_keys = set((state.get("tool_outputs", {}) or {}).keys())
+        valid: List[TavilyAction] = []
+        dropped: List[Tuple[str, str]] = []
+        # Prepare dtypes per key for light checks
+        key_has_cols: Dict[str, bool] = {}
+        for k, d in (state.get("tool_outputs", {}) or {}).items():
+            cols = list((d.get("dtypes") or {}).keys()) if isinstance(d.get("dtypes"), dict) else []
+            key_has_cols[k] = len(cols) > 0
+
+        for act in actions:
+            # Basic gating
+            if act.not_computable_from_local:
+                dropped.append((act.id, "not_computable_from_local=True"))
+                continue
+            if not set(act.requires_keys).issubset(known_keys):
+                missing = list(set(act.requires_keys) - known_keys)
+                dropped.append((act.id, f"unknown keys: {missing}"))
+                continue
+            # Ensure each required key at least has columns metadata
+            missing_cols = [k for k in act.requires_keys if not key_has_cols.get(k, False)]
+            if missing_cols:
+                dropped.append((act.id, f"keys lack columns metadata: {missing_cols}"))
+                continue
+            valid.append(act)
+
+        # Rank by confidence and cap to top-3
+        valid_sorted = sorted(valid, key=lambda a: float(a.confidence or 0.0), reverse=True)[:3]
+
+        # Build DeltaPlan
+        dp = DeltaPlan(
+            add_tables=[],
+            add_figures=[],
+            add_metrics={},
+            uses_existing_keys=[],
+            new_columns=[],
+            acceptance_checks=[],
+        )
+        for act in valid_sorted:
+            if act.new_column:
+                if act.new_column not in dp.new_columns:
+                    dp.new_columns.append(act.new_column)
+            # Merge metrics (last write wins; log collisions)
+            for m, v in (act.add_metrics or {}).items():
+                if m in dp.add_metrics and dp.add_metrics[m] != v:
+                    logger.info(f"DeltaPlan metric collision on '{m}': {dp.add_metrics[m]} -> {v}")
+                dp.add_metrics[m] = v
+            for k in act.requires_keys:
+                if k not in dp.uses_existing_keys:
+                    dp.uses_existing_keys.append(k)
+
+        # Optional acceptance checks scaffolding
+        if dp.new_columns:
+            dp.acceptance_checks.append("len(new_columns) >= 1")
+        if dp.add_metrics:
+            dp.acceptance_checks.append("metrics_updated >= 1")
+
+        # Persist to state
+        state["actions_synthesis"] = [a.model_dump() for a in valid_sorted]
+        state["delta_plan"] = dp.model_dump()
+        try:
+            eb = EvalBundle(eval_report=report, delta_plan=dp)
+            state["eval_bundle"] = eb.model_dump()
+        except Exception as exc:
+            logger.warning(f"EvalBundle construction failed: {exc}")
+            state["eval_bundle"] = {"eval_report": report.model_dump(), "delta_plan": dp.model_dump()}
+
+        logger.info(
+            f"Actions returned={len(actions)}, valid={len(valid_sorted)}, dropped={len(dropped)}; DeltaPlan new_columns={len(dp.new_columns)}, metrics={len(dp.add_metrics)}, keys={len(dp.uses_existing_keys)}"
+        )
+        if dropped:
+            logger.debug(f"Dropped actions detail: {dropped}")
+
+        if len(valid_sorted) == 0 and not state.get("should_finalize_after_eval"):
+            state["should_finalize_after_eval"] = True
+            logger.info("No computable actions; will skip delta code generation in later phase.")
+
+    except Exception as exc:
+        logger.warning(f"Action synthesis failed: {exc}")
+        state["actions_synthesis"] = []
+        state["delta_plan"] = {}
+        state["eval_bundle"] = {}
+
     return state
 
 
@@ -2397,7 +2640,7 @@ class DataAnalyticsAgent:
         
         logger.info("DataAnalyticsAgent initialized successfully")
     
-    def process_request(self, user_input: str, task_description: str = None) -> str:
+def process_request(self, user_input: str, task_description: str = None) -> str:
         """Process a user request through the complete workflow."""
         logger.info(f"Processing request: {user_input}")
         
@@ -2429,6 +2672,9 @@ class DataAnalyticsAgent:
             iteration_index=0,
             eval_report={},
             tavily_results={},
+            actions_synthesis=[],
+            delta_plan={},
+            eval_bundle={},
             delta_tool_outputs={},
             improvement_round=0,
             should_finalize_after_eval=False,
