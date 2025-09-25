@@ -550,7 +550,6 @@ class Evidence(BaseModel):
     used_query: str
     docs: List[Dict[str, Any]] = Field(default_factory=list)
     synthesis: str
-    caveats: List[str] = Field(default_factory=list)
 
 
 class ResearchBundle(BaseModel):
@@ -559,8 +558,6 @@ class ResearchBundle(BaseModel):
     goal: Optional[str] = ""
     queries: List[ResearchQuery] = Field(default_factory=list)
     evidences: List[Evidence] = Field(default_factory=list)
-    summary: str = ""
-    conflicts: List[str] = Field(default_factory=list)
     recommended_actions: List[str] = Field(default_factory=list)
 
 
@@ -673,7 +670,6 @@ class DeltaPlan(BaseModel):
     Only artifacts/metrics computable from local data should be included.
     """
 
-    add_tables: List[str] = Field(default_factory=list, description="Paths of new tables to create")
     add_figures: List[str] = Field(default_factory=list, description="Paths of new figures to create")
     add_metrics: Dict[str, float] = Field(default_factory=dict, description="Metrics to add/update")
     uses_existing_keys: List[str] = Field(default_factory=list, description="Local data keys referenced")
@@ -771,7 +767,6 @@ For the given research query, you must CALL the 'tavily_search' tool exactly onc
 - Do not produce any narrative before the tool call returns.
 - Use 'advanced' search_depth for non-trivial topics.
 - Prefer <= 7 results from credible domains. Use include/exclude domains if provided.
-- Use recency_days only when time-sensitive.
 - Set `max_results` to match the provided `k` value.
 After tool results are added back to the conversation, you will be asked to synthesize findings with citations.
 """
@@ -858,6 +853,7 @@ class AgentState(TypedDict):
     eval_report: Dict[str, Any]
     tavily_results: Dict[str, Any]
     actions_synthesis: List[Dict[str, Any]]
+    actions_synthesis_all: List[Dict[str, Any]]
     delta_plan: Dict[str, Any]
     eval_bundle: Dict[str, Any]
     delta_tool_outputs: Dict[str, Any]
@@ -1582,7 +1578,6 @@ def _run_tavily_for_one_query(rq: ResearchQuery, context: Dict[str, Any]) -> Evi
         "query_id": rq.id,
         "question": rq.question,
         "queries": rq.queries,
-        "recency_days": rq.recency_days,
         "k": rq.k,
         "max_results": rq.k,
     }
@@ -1634,8 +1629,9 @@ def _run_tavily_for_one_query(rq: ResearchQuery, context: Dict[str, Any]) -> Evi
             if "include_answer" not in parsed_args:
                 parsed_args["include_answer"] = True
 
-            # Remove any stray k field
+            # Remove any stray fields we do not support
             parsed_args.pop("k", None)
+            parsed_args.pop("recency_days", None)
             used_query = parsed_args.get("query", used_query)
             try:
                 logger.info(
@@ -1715,7 +1711,6 @@ def _run_tavily_for_one_query(rq: ResearchQuery, context: Dict[str, Any]) -> Evi
         used_query=used_query,
         docs=docs,
         synthesis=synthesis,
-        caveats=[],
     )
 
 
@@ -1730,14 +1725,14 @@ def tavily_research_node(state: AgentState) -> AgentState:
         report = EvalReport()
 
     if state.get("should_finalize_after_eval") or not report.research_queries:
-        bundle = ResearchBundle(goal=report.research_goal, queries=[], evidences=[], summary="", conflicts=[], recommended_actions=[])
+        bundle = ResearchBundle(goal=report.research_goal, queries=[], evidences=[], recommended_actions=[])
         state["tavily_results"] = bundle.model_dump()
         # No actions synthesis if we aren't running Tavily
         return state
 
     if tavily_client is None:
         logger.warning("Tavily research unavailable; skipping evidence gathering.")
-        bundle = ResearchBundle(goal=report.research_goal, queries=report.research_queries, evidences=[], summary="", conflicts=[], recommended_actions=[])
+        bundle = ResearchBundle(goal=report.research_goal, queries=report.research_queries, evidences=[], recommended_actions=[])
         state["tavily_results"] = bundle.model_dump()
         # No actions synthesis if Tavily is unavailable
         return state
@@ -1746,8 +1741,6 @@ def tavily_research_node(state: AgentState) -> AgentState:
     context_base = {
         "user_request": state.get("user_input", ""),
         "task_description": state.get("task_description", ""),
-        "research_goal": report.research_goal,
-        "evaluator_notes": report.notes,
         "warnings": state.get("warnings", []),
         "manifest_summary": state.get("manifest_summary", {}),
         "execution_result": state.get("execution_result", {}),
@@ -1761,7 +1754,6 @@ def tavily_research_node(state: AgentState) -> AgentState:
                 "priority": rq.priority,
                 "include_domains": rq.include_domains,
                 "exclude_domains": rq.exclude_domains,
-                "recency_days": rq.recency_days,
                 "citations_required": rq.citations_required,
             })
             evidences.append(_run_tavily_for_one_query(rq, query_context))
@@ -1772,8 +1764,6 @@ def tavily_research_node(state: AgentState) -> AgentState:
         goal=report.research_goal,
         queries=report.research_queries,
         evidences=evidences,
-        summary="",
-        conflicts=[],
         recommended_actions=[],
     )
     state["tavily_results"] = bundle.model_dump()
@@ -1808,6 +1798,7 @@ You are a strict planner that proposes only concrete, locally-computable actions
 Return ONLY JSON: either (1) an array of TavilyAction objects OR (2) the literal string NO_ACTION.
 Rules:
 - Use only local data keys and columns provided in the context.
+- requires_keys MUST be picked strictly from the provided local_keys list using exact names. Do not invent new keys.
 - Actions must be computable without new network calls.
 - Up to 3 high-confidence actions; if nothing computable, return NO_ACTION.
 """
@@ -1819,7 +1810,6 @@ Rules:
 
         payload = {
             "user_request": state.get("user_input", ""),
-            "research_goal": report.research_goal,
             "manifest_summary": state.get("manifest_summary", {}),
             "warnings": state.get("warnings", []),
             "local_keys": local_keys_summary,
@@ -1856,6 +1846,13 @@ Rules:
                 logger.info(f"Action synthesis JSON parse failed; treating as NO_ACTION: {pe}")
                 actions = []
 
+        # Persist all parsed actions (before validation) for audit/debugging
+        try:
+            state["actions_synthesis_all"] = [a.model_dump() for a in actions]
+            logger.info(f"Saved {len(actions)} raw actions to state.actions_synthesis_all")
+        except Exception:
+            state["actions_synthesis_all"] = []
+
         # Validate actions against local keys
         known_keys = set((state.get("tool_outputs", {}) or {}).keys())
         valid: List[TavilyAction] = []
@@ -1887,7 +1884,6 @@ Rules:
 
         # Build DeltaPlan
         dp = DeltaPlan(
-            add_tables=[],
             add_figures=[],
             add_metrics={},
             uses_existing_keys=[],
@@ -2673,6 +2669,7 @@ def process_request(self, user_input: str, task_description: str = None) -> str:
             eval_report={},
             tavily_results={},
             actions_synthesis=[],
+            actions_synthesis_all=[],
             delta_plan={},
             eval_bundle={},
             delta_tool_outputs={},
