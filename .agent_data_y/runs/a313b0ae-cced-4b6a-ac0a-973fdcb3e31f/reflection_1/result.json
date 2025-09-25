@@ -1,0 +1,102 @@
+{
+  "tables": [
+    {
+      "path": "/Users/aaryangoyal/Desktop/coffee_code/data_analytics_agent_copy_2/.agent_data_y/runs/a313b0ae-cced-4b6a-ac0a-973fdcb3e31f/reflection_1/rolling_betas.parquet",
+      "rows": 47,
+      "columns": [
+        "date",
+        "AAPL",
+        "TSLA",
+        "NVDA",
+        "GOOGL",
+        "AMZN",
+        "MSFT",
+        "NFLX"
+      ],
+      "schema": null,
+      "description": null
+    },
+    {
+      "path": "/Users/aaryangoyal/Desktop/coffee_code/data_analytics_agent_copy_2/.agent_data_y/runs/a313b0ae-cced-4b6a-ac0a-973fdcb3e31f/reflection_1/monthly_returns.parquet",
+      "rows": 47,
+      "columns": [
+        "date",
+        "AAPL",
+        "TSLA",
+        "NVDA",
+        "GOOGL",
+        "AMZN",
+        "MSFT",
+        "NFLX"
+      ],
+      "schema": null,
+      "description": null
+    },
+    {
+      "path": "/Users/aaryangoyal/Desktop/coffee_code/data_analytics_agent_copy_2/.agent_data_y/runs/a313b0ae-cced-4b6a-ac0a-973fdcb3e31f/reflection_1/monthly_weights.parquet",
+      "rows": 47,
+      "columns": [
+        "date",
+        "AAPL",
+        "TSLA",
+        "NVDA",
+        "GOOGL",
+        "AMZN",
+        "MSFT",
+        "NFLX"
+      ],
+      "schema": null,
+      "description": null
+    },
+    {
+      "path": "/Users/aaryangoyal/Desktop/coffee_code/data_analytics_agent_copy_2/.agent_data_y/runs/a313b0ae-cced-4b6a-ac0a-973fdcb3e31f/reflection_1/strategy_performance.parquet",
+      "rows": 47,
+      "columns": [
+        "date",
+        "strategy_return",
+        "raw_strategy_return",
+        "transaction_costs",
+        "turnover",
+        "gross_exposure",
+        "net_exposure",
+        "equity",
+        "drawdown"
+      ],
+      "schema": null,
+      "description": null
+    }
+  ],
+  "figures": [
+    {
+      "path": "/Users/aaryangoyal/Desktop/coffee_code/data_analytics_agent_copy_2/.agent_data_y/runs/a313b0ae-cced-4b6a-ac0a-973fdcb3e31f/reflection_1/equity_curve.html",
+      "caption": null,
+      "format": "html"
+    },
+    {
+      "path": "/Users/aaryangoyal/Desktop/coffee_code/data_analytics_agent_copy_2/.agent_data_y/runs/a313b0ae-cced-4b6a-ac0a-973fdcb3e31f/reflection_1/monthly_returns.html",
+      "caption": null,
+      "format": "html"
+    },
+    {
+      "path": "/Users/aaryangoyal/Desktop/coffee_code/data_analytics_agent_copy_2/.agent_data_y/runs/a313b0ae-cced-4b6a-ac0a-973fdcb3e31f/reflection_1/weights_heatmap.html",
+      "caption": null,
+      "format": "html"
+    }
+  ],
+  "metrics": {
+    "annualized_sharpe": 0.538615435764909,
+    "sharpe_ci_95_lower": -0.5385880806326238,
+    "sharpe_ci_95_upper": 1.3398906804513167,
+    "psr_prob_sharpe_gt_0": 0.9999994008426694,
+    "hit_rate": 0.2765957446808511,
+    "returns_skew": 1.6118077605164625,
+    "returns_kurtosis": 6.985221518035568,
+    "avg_turnover": 0.07092198581560283,
+    "max_drawdown": -0.14005983476710404,
+    "avg_gross_exposure": 0.4893617021276595,
+    "avg_net_exposure": 0.0,
+    "avg_hhi": 0.08156028368794326,
+    "n_observations": 47
+  },
+  "explanation": "Monthly long-short strategy based on 24-month rolling beta of stock returns vs CPI month-over-month change. Long bottom-3 betas, short top-3 betas, equal-weighted per side, monthly rebalanced with 1-month trade delay, commissions and slippage applied. Bootstrapped Sharpe CI and PSR estimated."
+}

@@ -1,0 +1,103 @@
+{
+  "tables": [
+    {
+      "path": "trade_ledger_csv",
+      "rows": 0,
+      "columns": [],
+      "schema": null,
+      "description": null
+    },
+    {
+      "path": "monthly_pnl_csv",
+      "rows": 0,
+      "columns": [],
+      "schema": null,
+      "description": null
+    },
+    {
+      "path": "metrics_summary_json",
+      "rows": 0,
+      "columns": [],
+      "schema": null,
+      "description": null
+    },
+    {
+      "path": "metrics_grid_csv",
+      "rows": 0,
+      "columns": [],
+      "schema": null,
+      "description": null
+    },
+    {
+      "path": "bootstrap_beta_cis_json",
+      "rows": 0,
+      "columns": [],
+      "schema": null,
+      "description": null
+    },
+    {
+      "path": "permutation_test_results",
+      "rows": 0,
+      "columns": [],
+      "schema": null,
+      "description": null
+    },
+    {
+      "path": "beta_stat_tests_csv",
+      "rows": 0,
+      "columns": [],
+      "schema": null,
+      "description": null
+    },
+    {
+      "path": "aligned_monthly_prices",
+      "rows": 0,
+      "columns": [],
+      "schema": null,
+      "description": null
+    },
+    {
+      "path": "aligned_monthly_cpi",
+      "rows": 0,
+      "columns": [],
+      "schema": null,
+      "description": null
+    }
+  ],
+  "figures": [
+    {
+      "path": "rolling_betas",
+      "caption": null,
+      "format": null
+    },
+    {
+      "path": "rank_heatmap",
+      "caption": null,
+      "format": null
+    },
+    {
+      "path": "cumulative_pnl",
+      "caption": null,
+      "format": null
+    },
+    {
+      "path": "turnover_exposure",
+      "caption": null,
+      "format": null
+    },
+    {
+      "path": "beta_return_scatter_example",
+      "caption": null,
+      "format": null
+    }
+  ],
+  "metrics": {
+    "annualized_return": null,
+    "annualized_vol": null,
+    "sharpe": null,
+    "max_drawdown": null,
+    "cagr": null,
+    "calmar_ratio": null
+  },
+  "explanation": "Backtest enforces 1-month signal delay (weights.shift(1)), resamples prices to calendar month-end using pandas frequency 'ME' and aligns CPI series to month-end; realistic friction (commission+slippage) applied; deterministic seeds set for bootstraps and permutations. See artifacts in DATA_DIR for detailed outputs."
+}

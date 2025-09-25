@@ -1,38 +1,81 @@
-# Financial Data Extraction Tools - Core Requirements
-# Essential dependencies for financial data tools
+# Data Analytics Agent - Comprehensive Requirements
+# Production-ready dependencies for high-stakes deployment
 
-# Data manipulation and analysis
-pandas>=2.2.0
-numpy>=1.26.0
+# ============================================================================
+# LLM & AI ORCHESTRATION (CRITICAL - Required for agent workflow)
+# ============================================================================
+openai>=1.12.0                    # GPT models via Responses API
+langgraph>=0.2.0                  # Workflow orchestration framework
+langsmith>=0.1.0                  # LLM tracing and monitoring
+pydantic>=2.11.0                  # Data validation and parsing (updated version)
+pydantic-ai>=0.0.12               # AI-powered Pydantic models
 
-# Data validation and modeling  
-pydantic>=2.11.0
-typing-extensions>=4.12.0
+# ============================================================================
+# RESEARCH & EMBEDDINGS (Enhanced capabilities)
+# ============================================================================
+tavily-python>=0.3.0              # Web research and data gathering
+sentence-transformers>=2.2.0      # Text embeddings and similarity
+faiss-cpu>=1.7.4                  # Fast vector similarity search
+# gpt-researcher>=0.7.0           # Automated research capabilities (build issues)
 
-# API clients for financial data
-polygon-api-client>=1.15.0  # Stock market data from Polygon
-fredapi>=0.5.2              # Economic data from FRED
-certifi>=2024.12.0          # SSL certificates for API calls
+# ============================================================================
+# DATA PROCESSING & ANALYSIS (Core functionality)
+# ============================================================================
+pandas>=2.2.0                     # Data manipulation and analysis
+numpy>=1.26.0                     # Numerical computing foundation
+statsmodels>=0.14.0               # Statistical analysis and modeling
+scikit-learn>=1.3.0               # Machine learning algorithms
 
-# Environment and configuration
-python-dotenv>=1.0.0        # Load environment variables from .env
+# ============================================================================
+# FINANCIAL DATA APIS (Existing integrations)
+# ============================================================================
+polygon-api-client>=1.15.0        # Stock market data from Polygon
+fredapi>=0.5.2                    # Economic data from FRED
+certifi>=2024.12.0                # SSL certificates for API calls
 
-# Async execution, retries, rate limiting, caching, and plotting
-tenacity>=8.2.0             # Retry with backoff + jitter
-aiolimiter>=1.1.0           # Async token-bucket rate limiter
-filelock>=3.13.0            # File-based locks for cache writes
-plotly>=5.22.0              # Interactive plotting (HTML export)
-pyarrow>=16.0.0             # Parquet IO engine (or use fastparquet)
+# ============================================================================
+# VISUALIZATION & REPORTING (Enhanced from existing)
+# ============================================================================
+plotly>=5.22.0                    # Interactive data visualizations
+seaborn>=0.12.0                   # Statistical data visualization
+matplotlib>=3.7.0                 # Static plotting and charts
+pyarrow>=16.0.0                   # Parquet IO engine
 
-# Optional: Development and testing
-# pytest>=7.0.0
-# pytest-asyncio>=0.21.0
+# ============================================================================
+# ASYNC & PERFORMANCE (Existing infrastructure)
+# ============================================================================
+aiolimiter>=1.1.0                 # Async rate limiting for APIs
+tenacity>=8.2.0                   # Robust retry mechanisms
+filelock>=3.13.0                  # Thread-safe file operations
 
-# Optional: Jupyter notebook support  
-# jupyter>=1.0.0
-# ipykernel>=6.0.0
+# ============================================================================
+# UTILITIES & ENVIRONMENT (Core infrastructure)
+# ============================================================================
+python-dotenv>=1.0.0              # Environment variable management
+typing-extensions>=4.12.0         # Enhanced type hints support
+graphviz>=0.20.0                  # Graph visualization (for workflow diagrams)
 
-# Future agent framework dependencies (install separately when needed)
-# langgraph>=0.2.0          # State machine orchestration
-# pydantic-ai>=0.1.0        # AI agent framework with structured outputs  
-# openai>=1.0.0             # OpenAI API client
+# ============================================================================
+# DEVELOPMENT DEPENDENCIES (Uncomment for development)
+# ============================================================================
+# pytest>=7.4.0                   # Testing framework
+# pytest-asyncio>=0.21.0          # Async testing support
+# hypothesis>=6.82.0              # Property-based testing
+# black>=23.0.0                   # Code formatting
+# ruff>=0.0.280                   # Fast Python linting
+
+# ============================================================================
+# JUPYTER SUPPORT (Optional - for notebook development)
+# ============================================================================
+# jupyter>=1.0.0                  # Jupyter notebook environment
+# ipykernel>=6.0.0                # IPython kernel for notebooks
+
+# ============================================================================
+# VERSION COMPATIBILITY NOTES
+# ============================================================================
+# - OpenAI 1.12.0+ required for Responses API compatibility
+# - Pydantic 2.11+ for modern validation features used in codebase
+# - LangGraph 0.2+ for enhanced workflow capabilities with conditional routing
+# - FAISS-CPU chosen over FAISS-GPU for broader deployment compatibility
+# - All versions tested with Python 3.9+ environments
+# - Backward compatible with existing financial data infrastructure

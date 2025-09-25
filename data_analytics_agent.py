@@ -134,7 +134,7 @@ TAVILY_TOOL_DEF = [{
         "required": ["query", "max_results"],
         "additionalProperties": False
     },
-    "strict": True
+    "strict": False
 }]
 
 # Constants
@@ -316,15 +316,6 @@ def _order_preserving_dedupe(items: List[str]) -> List[str]:
     return deduped
 
 
-def _code_context_snippet(state: AgentState, max_chars: int = 2000) -> str:
-    """Return a truncated view of generated code for planner prompts."""
-    code = state.get("generated_code") or ""
-    if not code:
-        return ""
-    snippet = code[:max_chars]
-    if len(code) > max_chars:
-        snippet += "\n# ... truncated for tool parameterization context ..."
-    return snippet
 
 
 def _build_dataset_descriptor(path: str) -> Dict[str, Any]:
@@ -797,7 +788,19 @@ class AgentState(TypedDict):
     unused_tool_files: Dict[str, str]
     unused_tool_outputs: Dict[str, Dict[str, Any]]
     unused_tool_names: List[str]
+    # Eval node tracking fields
+    eval_enhanced_input: Dict[str, Any]
+    eval_parsed_report: Dict[str, Any]
 
+def _code_context_snippet(state: AgentState, max_chars: int = 2000) -> str:
+    """Return a truncated view of generated code for planner prompts."""
+    code = state.get("generated_code") or ""
+    if not code:
+        return ""
+    snippet = code[:max_chars]
+    if len(code) > max_chars:
+        snippet += "\n# ... truncated for tool parameterization context ..."
+    return snippet
 ######################################################################
 # OpenAI Function Definitions (Provided via Registry)
 ######################################################################
@@ -1453,6 +1456,9 @@ def eval_report_node(state: AgentState) -> AgentState:
     enhanced_eval_input = eval_in.copy()
     enhanced_eval_input["unused_tools_context"] = unused_tools_context
 
+    # Store the enhanced input in state for tracking
+    state["eval_enhanced_input"] = enhanced_eval_input
+
     messages = [
         {"role": "system", "content": EVAL_REPORT_SYSTEM + "\n\nAlso consider unused tools that could enhance the analysis.\nReturn ONLY a JSON object that strictly conforms to this JSON Schema: " + json.dumps(_model_schema(EvalReport))},
         {"role": "user", "content": json.dumps(enhanced_eval_input, default=_json_default)},
@@ -1475,9 +1481,17 @@ def eval_report_node(state: AgentState) -> AgentState:
             notes="(fallback)",
         )
 
-    state["eval_report"] = parsed.model_dump()
-    has_actions = bool(parsed.improvements) or bool(parsed.research_queries) or bool(parsed.new_tool_suggestions)
-    state["should_finalize_after_eval"] = not has_actions
+    # Store both the legacy eval_report and the new parsed report
+    parsed_report = parsed.model_dump()
+    state["eval_report"] = parsed_report
+  
+
+    all_empty = (
+        len(parsed.improvements) == 0 and
+        len(parsed.research_queries) == 0 and
+        len(parsed.new_tool_suggestions) == 0
+    )
+    state["should_finalize_after_eval"] = all_empty
     return state
 
 
@@ -1801,7 +1815,7 @@ def extra_tool_exec_node(state: AgentState) -> AgentState:
                 })
 
         # DUAL STATE TRACKING (Your exact pattern)
-        state["unused_tool_picks"] = calls_log
+        state["unused_tool_param_reports"] = calls_log
         state["unused_tool_files"] = new_files_delta
         state["unused_tool_outputs"] = new_outputs_delta
         state["unused_tool_names"] = list(set(executed_tool_names))
@@ -1819,7 +1833,7 @@ def extra_tool_exec_node(state: AgentState) -> AgentState:
 
     except Exception as e:
         logger.error(f"Tool execution failed: {e}")
-        state["unused_tool_picks"] = []
+        state["unused_tool_param_reports"] = []
         state["unused_tool_files"] = {}
         state["unused_tool_outputs"] = {}
         state["unused_tool_names"] = []
@@ -2366,18 +2380,6 @@ class DataAnalyticsAgent:
             unused_tool_files={},
             unused_tool_outputs={},
             unused_tool_names=[],
-            # Critical missing field initializations
-            tool_artifacts=[],
-            result_manifest=None,
-            iteration_workdirs=[],
-            final_manifest_path="",
-            exec_workdir="",
-            manifest_ok=False,
-            planning_turn=0,
-            plan_history=[],
-            assumptions=[],
-            stop_reason="",
-            run_dir="",
         )
         # Provide base_data_dir in state for directory resolution
         initial_state["base_data_dir"] = getattr(self, "base_data_dir", os.environ.get("AGENT_DATA_DIR", os.path.join(os.getcwd(), ".agent_data")))
