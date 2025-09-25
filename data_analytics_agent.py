@@ -128,13 +128,13 @@ TAVILY_TOOL_DEF = [{
             "include_answer": {
                 "type": "boolean",
                 "description": "Whether to include Tavily's synthesized answer payload in the response.",
-                "default": False
+                "default": True
             },
         },
-        "required": ["query", "max_results"],
+        "required": ["query", "max_results", "search_depth"],
         "additionalProperties": False
     },
-    "strict": False
+    "strict": True
 }]
 
 # Constants
@@ -691,7 +691,8 @@ def _eval_input_from_state(state: "AgentState") -> Dict[str, Any]:
 
 TAVILY_QA_SYSTEM = """
 You are a research assistant using Tavily web search via function-calling.
-For the given research query, first CALL the 'tavily_search' tool with the most appropriate 'query' from the provided list of queries.
+For the given research query, you must CALL the 'tavily_search' tool exactly once with the best 'query' selected from the provided list.
+- Do not produce any narrative before the tool call returns.
 - Use 'advanced' search_depth for non-trivial topics.
 - Prefer <= 7 results from credible domains. Use include/exclude domains if provided.
 - Use recency_days only when time-sensitive.
@@ -1514,10 +1515,12 @@ def _run_tavily_for_one_query(rq: ResearchQuery, context: Dict[str, Any]) -> Evi
     if context:
         input_list.append({"role": "user", "content": json.dumps({"context": context}, default=_json_default)})
 
+    # Force a single tavily_search tool call; avoid narrative before results
     response = openai_client.responses.create(
         model=OPENAI_MODEL,
         tools=TAVILY_TOOL_DEF,
         input=input_list,
+        tool_choice={"type": "function", "name": "tavily_search"},
     )
     input_list.extend(response.output or [])
 
@@ -1525,14 +1528,46 @@ def _run_tavily_for_one_query(rq: ResearchQuery, context: Dict[str, Any]) -> Evi
     for item in response.output or []:
         if getattr(item, "type", "") == "function_call" and getattr(item, "name", "") == "tavily_search":
             try:
-                parsed_args = json.loads(item.arguments or "{}")
+                raw_args = item.arguments or "{}"
+                logger.debug(f"Tavily function_call raw arguments: {raw_args}")
+                parsed_args = json.loads(raw_args)
             except Exception:
                 parsed_args = {}
+
+            # Normalize and harden arguments with safe defaults
+            # k -> max_results (cap to [1,20])
             if "max_results" not in parsed_args and "k" in parsed_args:
                 parsed_args["max_results"] = parsed_args.pop("k")
+            if "max_results" not in parsed_args:
+                parsed_args["max_results"] = int(rq.k)
+            try:
+                mr = int(parsed_args.get("max_results", rq.k))
+                parsed_args["max_results"] = max(1, min(20, mr))
+            except Exception:
+                parsed_args["max_results"] = min(20, max(1, int(rq.k)))
+
+            # search_depth default and validation
+            depth = parsed_args.get("search_depth")
+            if depth not in ("basic", "advanced"):
+                parsed_args["search_depth"] = "advanced"
+
+            # include_answer default
+            if "include_answer" not in parsed_args:
+                parsed_args["include_answer"] = True
+
+            # Remove any stray k field
             parsed_args.pop("k", None)
             used_query = parsed_args.get("query", used_query)
             try:
+                logger.info(
+                    "Tavily: executing search",
+                )
+                logger.debug(
+                    "Tavily call payload",
+                )
+                logger.info(
+                    f"Tavily call query='{parsed_args.get('query','')}', max_results={parsed_args.get('max_results')}, search_depth={parsed_args.get('search_depth')}, include_answer={parsed_args.get('include_answer')}"
+                )
                 results = tavily_search(**parsed_args)
                 input_list.append(
                     {
@@ -1542,10 +1577,15 @@ def _run_tavily_for_one_query(rq: ResearchQuery, context: Dict[str, Any]) -> Evi
                     }
                 )
             except Exception as exc:
+                logger.warning(
+                    f"Tavily execution error: {type(exc).__name__}: {exc}"
+                )
                 input_list.append(
                     {
                         "role": "system",
-                        "content": f"(tavily execution error) {exc}",
+                        "content": (
+                            f"(tavily execution error) {type(exc).__name__}: {exc}"
+                        ),
                     }
                 )
 
@@ -1564,7 +1604,9 @@ def _run_tavily_for_one_query(rq: ResearchQuery, context: Dict[str, Any]) -> Evi
                 continue
             if not isinstance(payload, dict):
                 continue
-            for d in payload.get("results", {}).get("results", []):
+            raw_results = payload.get("results", {}).get("results", [])
+            # Extract documents
+            for d in raw_results:
                 docs.append({
                     "title": d.get("title", ""),
                     "url": d.get("url", ""),
@@ -1572,6 +1614,21 @@ def _run_tavily_for_one_query(rq: ResearchQuery, context: Dict[str, Any]) -> Evi
                     "published_at": d.get("published_time"),
                     "score": d.get("score"),
                 })
+
+    # Basic analytics logging for observability
+    try:
+        domain_counts: Dict[str, int] = {}
+        for d in docs:
+            url = d.get("url") or ""
+            m = re.match(r"https?://([^/]+)/", url)
+            if m:
+                domain_counts[m.group(1)] = domain_counts.get(m.group(1), 0) + 1
+        top_domains = sorted(domain_counts.items(), key=lambda x: x[1], reverse=True)[:3]
+        logger.info(
+            f"Tavily returned {len(docs)} docs; top domains: {[f'{k}:{v}' for k,v in top_domains]}"
+        )
+    except Exception:
+        pass
 
     synthesis = _extract_text(response2)
     return Evidence(
