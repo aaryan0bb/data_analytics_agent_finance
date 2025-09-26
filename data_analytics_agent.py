@@ -694,6 +694,24 @@ class DeltaCodePatch(BaseModel):
     )
 
 
+class DeltaBlockPatch(BaseModel):
+    """Delta-only snippet to append within the DELTA block.
+
+    The model must not return a full script; only the additional code to place between
+    '# === DELTA v1 START ===' and '# === DELTA v1 END ==='.
+    """
+
+    delta_block: str = Field(
+        ..., description="Python code to append within the DELTA block only"
+    )
+    changes_summary: str = Field(
+        ..., description="Natural language summary of what the delta adds"
+    )
+    reasoning: str = Field(
+        ..., description="Why these changes are correct and computable from local data"
+    )
+
+
 ######################################################################
 # Deterministic Prompt Templates for Improvement Loop
 ######################################################################
@@ -785,7 +803,7 @@ Return a short, well-structured paragraph + bullets. Avoid fluff.
 
 
 DELTA_CODE_SYSTEM = """
-You are a senior Python quant engineer. You will produce a FULL replacement script.
+You are a senior Python quant engineer. You will return ONLY a delta snippet to append inside the DELTA block.
 
 Hard constraints:
 - Read ONLY local artifacts listed by the agent (no network calls).
@@ -794,12 +812,20 @@ Hard constraints:
 - Preserve backtest hygiene: 1-bar signal delay, realistic friction settings, no look-ahead.
 - Keep DATA_DIR semantics: write outputs under os.environ['DATA_DIR'] (already set).
 
-Your tasks:
-- Apply the 'improvements' from the evaluator and the 'recommended_actions' from research synthesis.
-- If new artifacts were requested (artifacts_to_add), produce them in DATA_DIR.
-- Keep failure-safe: if a non-critical plot fails, write a 1x1 placeholder PNG.
+Anchor splicing:
+- You must return ONLY the code to append between:
+  # === DELTA v1 START ===
+  # === DELTA v1 END ===
+- Use existing variables/functions from the current code.
+- If imports are required, add them inside the delta block (Python allows mid-file imports) and avoid duplicating unless necessary.
+- No network calls; keep determinism; comply with result.json contract.
 
-Return JSON strictly matching DeltaCodePatch with `new_code` containing ONLY executable Python code (no markdown fences).
+Your tasks (use delta_plan):
+- new_columns: compute features using uses_existing_keys datasets and attach columns safely without breaking prior logic.
+- add_metrics: compute and merge numeric metrics into result.json['metrics'].
+- add_figures: create plots; on failure, write a 1x1 placeholder PNG.
+
+Return ONLY JSON strictly matching DeltaBlockPatch with `delta_block` containing ONLY executable Python code (no markdown fences).
 """
 
 ######################################################################
@@ -2145,17 +2171,52 @@ def delta_code_gen_node(state: AgentState) -> AgentState:
         logger.info("Eval report requested no further improvements; skipping delta code generation.")
         state["delta_tool_outputs"] = {}
         return state
+    # Ensure anchors exist; if missing, insert an empty DELTA block at EOF
+    current_code = state.get("generated_code", "") or ""
+    start_marker = "# === DELTA v1 START ==="
+    end_marker = "# === DELTA v1 END ==="
+    if start_marker not in current_code or end_marker not in current_code:
+        logger.info("Delta anchors not found; inserting empty DELTA block at end of file.")
+        append = ("\n\n" if not current_code.endswith("\n") else "\n") + f"{start_marker}\n{end_marker}\n"
+        current_code = current_code + append
+    # Extract existing block
+    try:
+        start_idx = current_code.index(start_marker)
+        end_idx = current_code.index(end_marker, start_idx)
+        prefix = current_code[:start_idx]
+        delta_section = current_code[start_idx:end_idx]
+        # Strip markers from delta_section content for clarity
+        existing_block = delta_section.split(start_marker, 1)[-1].strip("\n")
+        suffix = current_code[end_idx + len(end_marker):]
+        logger.info(f"Anchors found; existing DELTA block size: {len(existing_block)} chars")
+    except Exception as exc:
+        logger.warning(f"Failed to locate DELTA anchors after insertion: {exc}; skipping delta update.")
+        state["delta_tool_outputs"] = {}
+        state["should_finalize_after_eval"] = True
+        return state
+
+    # Log delta plan summary
+    try:
+        dp = state.get("delta_plan", {}) or {}
+        n_cols = len(dp.get("new_columns", []) or [])
+        n_metrics = len((dp.get("add_metrics", {}) or {}).keys())
+        n_keys = len(dp.get("uses_existing_keys", []) or [])
+        logger.info(f"Delta plan: new_columns={n_cols}, add_metrics={n_metrics}, uses_existing_keys={n_keys}")
+    except Exception:
+        logger.info("Delta plan summary unavailable")
     payload = {
         "eval_report": state.get("eval_report", {}),
         "tavily_results": state.get("tavily_results", {}),
+        "delta_plan": state.get("delta_plan", {}),
         "delta_tool_outputs": list((state.get("delta_tool_outputs", {}) or {}).keys()),
         "unused_tool_outputs": list((state.get("unused_tool_outputs", {}) or {}).keys()),
-        "current_code_excerpt": state.get("generated_code", "")[:2000],
+        "current_code_full": current_code,
+        "existing_delta_block": existing_block,
         "manifest_summary": state.get("manifest_summary", {}),
         "warnings": state.get("warnings", []),
     }
     messages = [
-        {"role": "system", "content": DELTA_CODE_SYSTEM + "\nReturn ONLY a JSON object that strictly conforms to this JSON Schema: " + json.dumps(_model_schema(DeltaCodePatch))},
+        {"role": "system", "content": DELTA_CODE_SYSTEM + "\nReturn ONLY a JSON object that strictly conforms to this JSON Schema: " + json.dumps(_model_schema(DeltaBlockPatch))},
         {"role": "user", "content": json.dumps(payload, default=_json_default)},
     ]
 
@@ -2165,19 +2226,23 @@ def delta_code_gen_node(state: AgentState) -> AgentState:
             input=messages,
         )
         raw = _extract_text(resp)
-        patch = DeltaCodePatch.model_validate(json.loads(raw))
+        patch = DeltaBlockPatch.model_validate(json.loads(raw))
     except Exception as exc:
         logger.warning(f"Delta code generation parse failed: {exc}")
-        patch = DeltaCodePatch(
-            new_code=state.get("generated_code", ""),
-            changes_summary="(fallback)",
-            reasoning="",
-        )
+        patch = DeltaBlockPatch(delta_block="", changes_summary="(fallback)", reasoning="")
 
-    parsed_code = CodeResponse.parse_llm_response(patch.new_code).code
-    state["generated_code"] = parsed_code
+    delta_block = CodeResponse.parse_llm_response(patch.delta_block).code
+    if not delta_block.strip():
+        logger.info("Delta returned empty snippet; skipping append.")
+    else:
+        round_idx = int(state.get("improvement_round", 0)) + 1
+        header = f"\n# --- DELTA APPEND round {round_idx} ---\n"
+        new_delta_content = (existing_block + header + delta_block).rstrip() + "\n"
+        # Recompose final code with preserved anchors
+        spliced = f"{prefix}{start_marker}\n{new_delta_content}{end_marker}{suffix}"
+        state["generated_code"] = spliced
     prev_explanation = state.get("code_explanation", "")
-    delta_notes = (prev_explanation + "\nDelta changes:\n" + patch.changes_summary).strip()
+    delta_notes = (prev_explanation + "\nDelta changes:\n" + (patch.changes_summary or "")).strip()
     state["code_explanation"] = delta_notes
     state["improvement_round"] = int(state.get("improvement_round", 0)) + 1
     state["eval_report"] = {}
