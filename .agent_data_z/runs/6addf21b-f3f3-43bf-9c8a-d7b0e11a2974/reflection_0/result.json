@@ -1,0 +1,46 @@
+{
+  "tables": [
+    {
+      "path": "/Users/aaryangoyal/Desktop/coffee_code/data_analytics_agent_copy_3/.agent_data_z/runs/6addf21b-f3f3-43bf-9c8a-d7b0e11a2974/reflection_0/insider_net_90d_rank_20250926.csv",
+      "rows": 102,
+      "columns": [
+        "symbol",
+        "net_shares_90d",
+        "net_dollar_90d",
+        "tx_count",
+        "buy_count",
+        "sell_count",
+        "last_trade_date",
+        "rank",
+        "rank_pct"
+      ],
+      "schema": null,
+      "description": null
+    }
+  ],
+  "figures": [
+    {
+      "path": "/Users/aaryangoyal/Desktop/coffee_code/data_analytics_agent_copy_3/.agent_data_z/runs/6addf21b-f3f3-43bf-9c8a-d7b0e11a2974/reflection_0/top_net_insider_buys_20250926.html",
+      "caption": null,
+      "format": "html"
+    }
+  ],
+  "metrics": {
+    "formation_date": "2025-09-26",
+    "lookback_days": 90,
+    "universe_size_90d": 102,
+    "long_bucket_size": 10,
+    "short_bucket_size": 0,
+    "backtest": {
+      "status": "skipped_missing_prices",
+      "reason": "No local price artifacts provided to compute 3-month forward returns."
+    },
+    "frictions_bps": {
+      "slippage": 5.0,
+      "commission": 1.0
+    },
+    "leverage_cap": 1.0,
+    "allow_shorts": false
+  },
+  "explanation": "This analysis ranks stocks by net insider buying (shares * price with A=+1, D=-1) over the last 90 days ending on 2025-09-26. It saves a ranking table and a Plotly bar chart of the top names. A 3-month forward performance backtest is prepared with strict no-lookahead (trade next bar), frictions (slippage and commissions), position limits, and exposure caps; however, it is skipped in this run because no local price artifacts were provided. If price data (with adjusted prices) are supplied locally, the script will compute forward returns, Sharpe, Probabilistic Sharpe Ratio, 95% bootstrap CI for Sharpe, turnover, gross/net exposure, max drawdown, and HHI of weights, and will save the equity and returns time series."
+}

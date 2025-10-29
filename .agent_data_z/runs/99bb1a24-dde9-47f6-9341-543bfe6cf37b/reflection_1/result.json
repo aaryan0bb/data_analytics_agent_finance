@@ -1,0 +1,63 @@
+{
+  "tables": [
+    {
+      "path": "/Users/aaryangoyal/Desktop/coffee_code/data_analytics_agent_copy_3/.agent_data_z/runs/99bb1a24-dde9-47f6-9341-543bfe6cf37b/reflection_1/filtered_open_market_insider_trades.csv",
+      "rows": 102,
+      "columns": [
+        "symbol",
+        "transactionDate",
+        "acquisitionOrDisposition",
+        "transactionType",
+        "shares",
+        "price",
+        "directOrIndirect",
+        "reportingName",
+        "side",
+        "notional",
+        "signed_notional"
+      ],
+      "schema": null,
+      "description": null
+    },
+    {
+      "path": "/Users/aaryangoyal/Desktop/coffee_code/data_analytics_agent_copy_3/.agent_data_z/runs/99bb1a24-dde9-47f6-9341-543bfe6cf37b/reflection_1/insider_signal_panel.parquet",
+      "rows": 10296,
+      "columns": [
+        "date",
+        "symbol",
+        "daily_signed_notional",
+        "daily_buy_notional",
+        "daily_sell_notional",
+        "distinct_insiders",
+        "daily_trades",
+        "net_dollar_90d",
+        "insiders_90d",
+        "trades_90d",
+        "ewm_signal",
+        "cluster_intensity",
+        "insider_signal",
+        "signal_z"
+      ],
+      "schema": null,
+      "description": null
+    },
+    {
+      "path": "/Users/aaryangoyal/Desktop/coffee_code/data_analytics_agent_copy_3/.agent_data_z/runs/99bb1a24-dde9-47f6-9341-543bfe6cf37b/reflection_1/latest_insider_signal_ranking.csv",
+      "rows": 39,
+      "columns": [
+        "symbol",
+        "insider_signal",
+        "signal_z",
+        "insiders_90d",
+        "trades_90d"
+      ],
+      "schema": null,
+      "description": null
+    }
+  ],
+  "figures": [],
+  "metrics": {
+    "backtest_run": false
+  },
+  "explanation": "Price data not provided in artifacts; skipping 3-month forward performance backtest. To run the backtest, set PRICE_PATHS env with local CSV/Parquet files containing date, symbol, adjusted close (and open if available). This analysis constructs a 90-day net insider buying signal emphasizing open-market, direct-ownership purchases and penalizing sells, with recency weighting and cluster intensity based on distinct insiders. Signals are ranked cross-sectionally and saved. If local adjusted price data is supplied via PRICE_PATHS, the script runs a one-bar delayed long-short backtest with realistic frictions (commission, slippage, borrow), leverage and position limits, and reports Sharpe, PSR, bootstrap CI, hit rate, skew/kurtosis, turnover, exposures, and drawdowns. All tables and figures are saved under DATA_DIR, and no network resources are accessed."
+}

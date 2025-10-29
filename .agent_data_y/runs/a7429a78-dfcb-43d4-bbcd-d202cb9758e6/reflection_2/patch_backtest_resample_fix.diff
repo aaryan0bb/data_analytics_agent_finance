@@ -1,4 +1,0 @@
-*** patch_backtest_resample_fix.diff
-*** Replace deprecated pandas resample frequency 'M' with 'ME' (month-end)
-*** Ensure timezone-naive alignment for datetime indices
-*** Enforce explicit 1-month signal delay when turning betas into trade signals (weights.shift(1))

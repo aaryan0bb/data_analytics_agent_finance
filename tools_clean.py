@@ -434,8 +434,8 @@ def extract_latest_insider_trades_from_fmp(start_date: str, end_date: str) -> pd
         )
 
         # Fetch insider trades data
-        base_url = "https://financialmodelingprep.com/api/v3/"
-        url = f"{base_url}insider-trading/latest?limit=100&apikey={api_key}"
+        base_url = "https://financialmodelingprep.com/stable/"
+        url = f"{base_url}insider-trading/latest?limit=500&apikey={api_key}"
 
         json_data = get_jsonparsed_data(url)
 
@@ -445,33 +445,34 @@ def extract_latest_insider_trades_from_fmp(start_date: str, end_date: str) -> pd
 
         # Convert to DataFrame
         df = pd.DataFrame(json_data)
+        
 
-        # Filter by date range if date column exists (similar to fundamentals filtering)
-        if 'date' in df.columns:
-            df['date'] = pd.to_datetime(df['date'])
+        # # Filter by date range if date column exists (similar to fundamentals filtering)
+        # if 'date' in df.columns:
+        #     df['date'] = pd.to_datetime(df['date'])
 
-            if start_date:
-                start_dt = pd.to_datetime(start_date)
-                df = df[df['date'] >= start_dt]
+        #     if start_date:
+        #         start_dt = pd.to_datetime(start_date)
+        #         df = df[df['date'] >= start_dt]
 
-            if end_date:
-                end_dt = pd.to_datetime(end_date)
-                df = df[df['date'] <= end_dt]
+        #     if end_date:
+        #         end_dt = pd.to_datetime(end_date)
+        #         df = df[df['date'] <= end_dt]
 
-            df.sort_values('date', inplace=True, ascending=False)
-        elif 'filingDate' in df.columns:
-            # Alternative date column sometimes used in insider trades
-            df['date'] = pd.to_datetime(df['filingDate'])
+        #     df.sort_values('date', inplace=True, ascending=False)
+        # elif 'filingDate' in df.columns:
+        #     # Alternative date column sometimes used in insider trades
+        #     df['date'] = pd.to_datetime(df['filingDate'])
 
-            if start_date:
-                start_dt = pd.to_datetime(start_date)
-                df = df[df['date'] >= start_dt]
+        #     if start_date:
+        #         start_dt = pd.to_datetime(start_date)
+        #         df = df[df['date'] >= start_dt]
 
-            if end_date:
-                end_dt = pd.to_datetime(end_date)
-                df = df[df['date'] <= end_dt]
+        #     if end_date:
+        #         end_dt = pd.to_datetime(end_date)
+        #         df = df[df['date'] <= end_dt]
 
-            df.sort_values('date', inplace=True, ascending=False)
+        #     df.sort_values('date', inplace=True, ascending=False)
 
         logger.info(f"Retrieved {len(df)} insider trades records")
         return df

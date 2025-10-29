@@ -1,0 +1,8 @@
+{
+  "tables": [],
+  "figures": [],
+  "metrics": {
+    "warning": "No local price data found. Skipped 3-month forward performance test and equity curve construction. Provide PRICE_DATA_PATH (CSV/Parquet with date,symbol,adj_close) to enable backtest."
+  },
+  "explanation": "Built an insider-buying composite signal using Form 4 filings over 90-day windows keyed by filingDate (to avoid look-ahead). Symbols are ranked weekly by a robust z-scored combination of net insider dollars (60% weight), unique buy insider activity intensity (30%), and net shares (10%), with a bonus for clustered activity (>=3 unique insider buyers in 90 days). Trading hygiene: rankings use information available at time t (filings up to rank_date), trades are assumed to occur from t+1, corporate actions are handled via adjusted closes when available, and frictions include 1bp commission and 2bps slippage per side. If price data is provided locally, the script runs a 63-trading-day forward event study for the top basket and builds an overlapping daily portfolio to compute Sharpe, PSR, drawdown, turnover, and exposures. Enhancements implemented: robust scaling to dampen outliers, insider cluster bonus, and weekly rebalancing to reduce turnover. Caution: If you try multiple parameter variants (e.g., different windows or weights), account for multiple testing risk (e.g., White's Reality Check or SPA)."
+}

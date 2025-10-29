@@ -1,0 +1,10 @@
+{
+  "tables": [],
+  "figures": [],
+  "metrics": {
+    "data_available": false,
+    "backtest_executed": false,
+    "backtest_reason": "No local price history artifacts provided; cannot compute 3-month forward performance without adjusted prices."
+  },
+  "explanation": "This script ranks stocks by net insider buys over the last 90 days using the provided local insider trades artifact. It attempts to run a 3-month forward performance test with rigorous backtesting hygiene (1-bar trade delay, commissions and slippage, exposure caps), and would report Sharpe, PSR, 95% bootstrap CI, hit rate, skew, kurtosis, turnover, and max drawdown. However, no local price history artifacts were provided, so the forward performance backtest could not be executed. The ranking table and a bar chart of top net insider buys were saved."
+}

@@ -1,0 +1,172 @@
+{
+  "tables": [
+    {
+      "path": "/Users/aaryangoyal/Desktop/coffee_code/data_analytics_agent_copy_3/.agent_data_z/runs/456485c2-bdcc-41f3-9bf1-0a4957f70e6f/reflection_0/cpi_levels_last4y.csv",
+      "rows": 49,
+      "columns": [
+        "CPIAUCSL"
+      ],
+      "schema": null,
+      "description": null
+    },
+    {
+      "path": "/Users/aaryangoyal/Desktop/coffee_code/data_analytics_agent_copy_3/.agent_data_z/runs/456485c2-bdcc-41f3-9bf1-0a4957f70e6f/reflection_0/cpi_monthly_change_last4y.csv",
+      "rows": 48,
+      "columns": [
+        "cpi_change"
+      ],
+      "schema": null,
+      "description": null
+    },
+    {
+      "path": "/Users/aaryangoyal/Desktop/coffee_code/data_analytics_agent_copy_3/.agent_data_z/runs/456485c2-bdcc-41f3-9bf1-0a4957f70e6f/reflection_0/prices_monthly_last4y.csv",
+      "rows": 49,
+      "columns": [
+        "AAPL",
+        "TSLA",
+        "NVDA",
+        "GOOGL",
+        "AMZN",
+        "MSFT",
+        "NFLX"
+      ],
+      "schema": null,
+      "description": null
+    },
+    {
+      "path": "/Users/aaryangoyal/Desktop/coffee_code/data_analytics_agent_copy_3/.agent_data_z/runs/456485c2-bdcc-41f3-9bf1-0a4957f70e6f/reflection_0/returns_monthly_last4y.csv",
+      "rows": 48,
+      "columns": [
+        "AAPL",
+        "TSLA",
+        "NVDA",
+        "GOOGL",
+        "AMZN",
+        "MSFT",
+        "NFLX"
+      ],
+      "schema": null,
+      "description": null
+    },
+    {
+      "path": "/Users/aaryangoyal/Desktop/coffee_code/data_analytics_agent_copy_3/.agent_data_z/runs/456485c2-bdcc-41f3-9bf1-0a4957f70e6f/reflection_0/rolling_betas_24m.csv",
+      "rows": 48,
+      "columns": [
+        "AAPL",
+        "TSLA",
+        "NVDA",
+        "GOOGL",
+        "AMZN",
+        "MSFT",
+        "NFLX"
+      ],
+      "schema": null,
+      "description": null
+    },
+    {
+      "path": "/Users/aaryangoyal/Desktop/coffee_code/data_analytics_agent_copy_3/.agent_data_z/runs/456485c2-bdcc-41f3-9bf1-0a4957f70e6f/reflection_0/beta_ranks.csv",
+      "rows": 48,
+      "columns": [
+        "AAPL",
+        "TSLA",
+        "NVDA",
+        "GOOGL",
+        "AMZN",
+        "MSFT",
+        "NFLX"
+      ],
+      "schema": null,
+      "description": null
+    },
+    {
+      "path": "/Users/aaryangoyal/Desktop/coffee_code/data_analytics_agent_copy_3/.agent_data_z/runs/456485c2-bdcc-41f3-9bf1-0a4957f70e6f/reflection_0/intended_weights.csv",
+      "rows": 48,
+      "columns": [
+        "AAPL",
+        "TSLA",
+        "NVDA",
+        "GOOGL",
+        "AMZN",
+        "MSFT",
+        "NFLX"
+      ],
+      "schema": null,
+      "description": null
+    },
+    {
+      "path": "/Users/aaryangoyal/Desktop/coffee_code/data_analytics_agent_copy_3/.agent_data_z/runs/456485c2-bdcc-41f3-9bf1-0a4957f70e6f/reflection_0/executed_weights_lagged.csv",
+      "rows": 48,
+      "columns": [
+        "AAPL",
+        "TSLA",
+        "NVDA",
+        "GOOGL",
+        "AMZN",
+        "MSFT",
+        "NFLX"
+      ],
+      "schema": null,
+      "description": null
+    },
+    {
+      "path": "/Users/aaryangoyal/Desktop/coffee_code/data_analytics_agent_copy_3/.agent_data_z/runs/456485c2-bdcc-41f3-9bf1-0a4957f70e6f/reflection_0/backtest_timeseries.csv",
+      "rows": 48,
+      "columns": [
+        "gross_return",
+        "net_return",
+        "turnover",
+        "tcost",
+        "gross_exposure",
+        "net_exposure",
+        "cum_net",
+        "drawdown",
+        "hhi_net",
+        "hhi_long",
+        "hhi_short"
+      ],
+      "schema": null,
+      "description": null
+    }
+  ],
+  "figures": [
+    {
+      "path": "/Users/aaryangoyal/Desktop/coffee_code/data_analytics_agent_copy_3/.agent_data_z/runs/456485c2-bdcc-41f3-9bf1-0a4957f70e6f/reflection_0/plot_rolling_betas.html",
+      "caption": null,
+      "format": "html"
+    },
+    {
+      "path": "/Users/aaryangoyal/Desktop/coffee_code/data_analytics_agent_copy_3/.agent_data_z/runs/456485c2-bdcc-41f3-9bf1-0a4957f70e6f/reflection_0/plot_equity_drawdown.html",
+      "caption": null,
+      "format": "html"
+    }
+  ],
+  "metrics": {
+    "period_start": "2021-09-30",
+    "period_end": "2025-08-31",
+    "rolling_window_months": 24,
+    "long_count": 3,
+    "short_count": 3,
+    "gross_target": 1.0,
+    "max_weight_per_name": 0.2,
+    "commission_bps": 5,
+    "slippage_bps": 5,
+    "avg_gross_exposure": 0.4791666666666666,
+    "avg_net_exposure": 0.0,
+    "avg_monthly_turnover": 0.13888888888888887,
+    "sharpe_net_annualized": 0.5251882215911106,
+    "sharpe_net_ci95_low": -0.4935778275537469,
+    "sharpe_net_ci95_high": 1.3151695406159247,
+    "sharpe_gross_annualized": 0.5407218911138646,
+    "psr_net_vs_0": 0.8798410680439853,
+    "hit_rate": 0.2708333333333333,
+    "skew_net": 1.6831264253729732,
+    "kurtosis_net_excess": 4.739770028018913,
+    "max_drawdown": -0.14108371791206253,
+    "avg_hhi_net": 0.07986111111111112,
+    "avg_hhi_long": 0.3333333333333333,
+    "avg_hhi_short": 0.3333333333333333,
+    "lookahead_avoidance": "Signals (betas) computed with information up to month t; positions executed at t+1 (1-bar delay).",
+    "frictions_included": "Commission 5bps and slippage 5bps applied via turnover; borrow implicit within short exposure and per-name cap."
+  },
+  "explanation": "CPI monthly levels were loaded and converted to monthly percent change over the last 4 years. Daily adjusted closes for AAPL, TSLA, NVDA, GOOGL, AMZN, MSFT, NFLX were resampled to month-end and monthly returns computed. For each stock, a 24-month rolling beta versus CPI monthly change was calculated. Each month, stocks were ranked by beta (ascending). The strategy goes long the 3 lowest-beta names and short the 3 highest-beta names, enforcing a one-month trade delay (no look-ahead), gross exposure near 1.0 (0.5 long, 0.5 short), and a per-name weight cap of 20%. Transaction costs assume 5 bps commission and 5 bps slippage per one-way turnover. We report turnover, exposures, Sharpe, PSR, 95% bootstrap CI of Sharpe, hit rate, skew, kurtosis, HHI, and max drawdown. All tables were saved as CSV in DATA_DIR and interactive Plotly charts (dark theme) were saved as standalone HTML."
+}

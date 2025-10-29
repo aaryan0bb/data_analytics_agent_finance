@@ -1,0 +1,94 @@
+{
+  "tables": [
+    {
+      "path": "/Users/aaryangoyal/Desktop/coffee_code/data_analytics_agent_copy_3/.agent_data_z/runs/99bb1a24-dde9-47f6-9341-543bfe6cf37b/reflection_2/filtered_open_market_insider_trades.csv",
+      "rows": 102,
+      "columns": [
+        "symbol",
+        "transactionDate",
+        "acquisitionOrDisposition",
+        "transactionType",
+        "shares",
+        "price",
+        "directOrIndirect",
+        "reportingName",
+        "side",
+        "notional",
+        "signed_notional"
+      ],
+      "schema": null,
+      "description": null
+    },
+    {
+      "path": "/Users/aaryangoyal/Desktop/coffee_code/data_analytics_agent_copy_3/.agent_data_z/runs/99bb1a24-dde9-47f6-9341-543bfe6cf37b/reflection_2/insider_signal_panel.parquet",
+      "rows": 10296,
+      "columns": [
+        "date",
+        "symbol",
+        "daily_signed_notional",
+        "daily_buy_notional",
+        "daily_sell_notional",
+        "distinct_insiders",
+        "daily_trades",
+        "net_dollar_90d",
+        "insiders_90d",
+        "trades_90d",
+        "ewm_signal",
+        "cluster_intensity",
+        "insider_signal",
+        "signal_z"
+      ],
+      "schema": null,
+      "description": null
+    },
+    {
+      "path": "/Users/aaryangoyal/Desktop/coffee_code/data_analytics_agent_copy_3/.agent_data_z/runs/99bb1a24-dde9-47f6-9341-543bfe6cf37b/reflection_2/latest_insider_signal_ranking.csv",
+      "rows": 39,
+      "columns": [
+        "symbol",
+        "insider_signal",
+        "signal_z",
+        "insiders_90d",
+        "trades_90d"
+      ],
+      "schema": null,
+      "description": null
+    },
+    {
+      "path": "/Users/aaryangoyal/Desktop/coffee_code/data_analytics_agent_copy_3/.agent_data_z/runs/99bb1a24-dde9-47f6-9341-543bfe6cf37b/reflection_2/insider_signal_panel_enhanced.parquet",
+      "rows": 10296,
+      "columns": [
+        "date",
+        "symbol",
+        "daily_signed_notional",
+        "daily_buy_notional",
+        "daily_sell_notional",
+        "distinct_insiders",
+        "daily_trades",
+        "net_dollar_90d",
+        "insiders_90d",
+        "trades_90d",
+        "ewm_signal",
+        "cluster_intensity",
+        "insider_signal",
+        "signal_z",
+        "breadth_30d",
+        "cluster_weekly_max"
+      ],
+      "schema": null,
+      "description": null
+    }
+  ],
+  "figures": [],
+  "metrics": {
+    "backtest_run": false,
+    "symbols_90d": 38.0,
+    "pct_positive_net_dollars_90d": 0.07894736842105263,
+    "mean_net_dollars_90d": -3374380.8021044736,
+    "enhanced_top_bucket_size": 4.0,
+    "data_snapshot_sha256": "33c7d5e86b485c64ef0eb23ffb7e8c80e9e98f5bf89238d6c59beb07dc43ad55",
+    "latest_panel_date": "2025-09-26 00:00:00",
+    "metrics_updated": 1
+  },
+  "explanation": "Price data not provided in artifacts; skipping 3-month forward performance backtest. To run the backtest, set PRICE_PATHS env with local CSV/Parquet files containing date, symbol, adjusted close (and open if available). This analysis constructs a 90-day net insider buying signal emphasizing open-market, direct-ownership purchases and penalizing sells, with recency weighting and cluster intensity based on distinct insiders. Signals are ranked cross-sectionally and saved. If local adjusted price data is supplied via PRICE_PATHS, the script runs a one-bar delayed long-short backtest with realistic frictions (commission, slippage, borrow), leverage and position limits, and reports Sharpe, PSR, bootstrap CI, hit rate, skew/kurtosis, turnover, exposures, and drawdowns. All tables and figures are saved under DATA_DIR, and no network resources are accessed. Post-processing added breadth_30d and cluster_weekly_max columns to an enhanced panel, and summary diagnostics on the latest cross-section: coverage (symbols_90d), share of positive net dollar flow, mean net 90d dollars, and the count in the top decile by standardized signal. A deterministic SHA-256 snapshot of the insider source file was also recorded."
+}
