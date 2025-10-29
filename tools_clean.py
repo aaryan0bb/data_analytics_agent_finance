@@ -366,8 +366,6 @@ def extract_fundamentals_data_from_fmp(ticker: str, start_date: str, end_date: s
         url = (f"{FMP_BASE_URL}key-metrics/{ticker}"
                f"?period=quarter&limit=60&apikey={FMP_API_KEY}")
 
-        # url = (f"https://financialmodelingprep.com/api/v3/key-metrics/AAPL?period=quarter&limit=60&apikey=4659ab78d056051dc50f892d465471f1")
-        
         data = get_jsonparsed_data(url)
         
         if not data:
